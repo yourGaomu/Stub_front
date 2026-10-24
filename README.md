@@ -29,3 +29,29 @@ npm run dev
 ```
 
 默认开发端口为 `http://localhost:5173`，Vite 已配置将 `/api` 与 `/r/` 代理至 `VITE_API_PROXY_TARGET`（默认 `http://localhost:8588`）。
+
+## Docker 部署
+
+CI (GitHub Actions) 在每次 push `master` 后自动构建并推送镜像到 GHCR, 任何有 Docker 的机器可直接使用:
+
+```bash
+# <owner> = 仓库所有者的 GitHub 用户名 (即 git 提交人 / 仓库 owner)
+# 例: 仓库为 jimoying/Stub_front 时, 镜像为 ghcr.io/jimoying/stub-front
+docker pull ghcr.io/<owner>/stub-front:latest
+
+# 移除旧容器 (如有)
+docker rm -f stub-front
+
+# 运行: API_UPSTREAM 指向 Stub 后端地址 (必填)
+docker run -d --name stub-front -p 8000:80 \
+  -e API_UPSTREAM=https://<你的后端地址> \
+  ghcr.io/<owner>/stub-front:latest
+```
+
+访问 `http://<主机>:8000` 即可。
+
+说明:
+
+- `API_UPSTREAM` 必填, 容器内 nginx 会把 `/api` 与 `/r/` 同源反代到该后端;
+- GHCR 镜像包默认 private: 拉取前需 `docker login ghcr.io` (GitHub 用户名 + 带 `read:packages` 权限的 PAT), 或到 GitHub → Packages 里将该包改为 public;
+- 构建参数、本地部署与故障排查详见 [DEPLOY.md](DEPLOY.md)。

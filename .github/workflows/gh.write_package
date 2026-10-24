@@ -1,0 +1,68 @@
+仓库目前**还没有任何 Release 和 Tag**, 也没有发版 workflow — 所以这是创建第一个发版说明。给你两种方式:
+
+## 方式 1: gh 命令(推荐, 你本机 gh 已登录 jimoying)
+
+```powershell
+$notes = @'
+## 修复
+
+### CI / 镜像发布
+- 修复 GHCR 镜像名含大写字母导致构建失败的问题 (`repository name must be lowercase`), CI 中将镜像 owner 统一转小写
+- 修复 GITHUB_TOKEN 推送 GHCR 报 `permission_denied: write_package` 的问题 (重建 ghcr.io/jimoying/stub-front 包并绑定本仓库)
+
+<details>
+<summary>维护者备注: GHCR 包排错与重建命令</summary>
+
+包设置页 (注意与详情页 URL 不同, 少一段 /package/):
+https://github.com/users/jimoying/packages/container/stub-front/settings
+
+如需删除重建包:
+
+    gh auth refresh -h github.com -s read:packages,delete:packages
+    gh api -X DELETE /user/packages/container/stub-front
+
+</details>
+'@
+
+gh release create v1.0.0 --repo jimoying/Stub_front --title "v1.0.0" --notes $notes
+```
+
+一条命令同时完成: 打 tag `v1.0.0` + 创建 Release + 写入说明。版本号想从 `v0.1.0` 起也行。
+
+## 方式 2: 网页
+
+1. 仓库页 → **Releases**(右侧栏)→ **Draft a new release**;
+2. **Choose a tag** → 输入 `v1.0.0` → **Create new tag on publish**;
+3. 标题填 `v1.0.0`, 大框里把上面 `$notes` 里的 markdown 内容粘进去;
+4. **Publish release**。
+
+## 发版说明内容说明
+
+我把这次的事拆成了两层, 你可以按需删减:
+- **修复列表**: 面向使用者, 两行说清镜像名小写和包权限两个修复;
+- **维护者备注**(折叠块): 装了正确设置页 URL 和那两条 gh 删包命令 — 就是你选中的那段, 放进折叠块里以后自己查方便, 也不干扰普通读者。
+
+## 边缘场景
+
+1. **发版前先确认 CI 是绿的**: 你上次的 run 还失败着, 先把包授权/删包处理完并 Re-run 成功, 再发版, 别带着红的 CI 发 v1.0.0;
+2. `gh release create` 打的 tag 不匹配 `on: push: branches: [master]`, 不会额外触发 CI;
+3. fork 同步上游后 Release 不会同步(fork 不带 Release), 上游自己发版才有;
+4. 以后每次发版可用 `gh release edit v1.0.0 --notes "新内容"` 追加, 或网页上铅笔图标编辑。
+
+## 测试建议
+
+1. 发布后打开 `https://github.com/jimoying/Stub_front/releases` 确认说明渲染正常(折叠块可展开);
+2. `gh release view v1.0.0 --repo jimoying/Stub_front` 验证命令行可读;
+3. `git fetch --tags` 确认 tag 到了本地。
+
+------------------------------------------------------------------------
+
+````
+https://github.com/users/jimoying/packages/container/stub-front/settings , 登录后会看到设置项, 然后二选一:
+方案 A — 授权 (保留已有镜像):
+在 Manage Actions access 区域 → Add repository → 搜索选择 jimoying/Stub_front → Role 给 Write → 保存。
+
+方案 B — 删包重建 (更干净, 推荐):
+拉到页面底部 Danger Zone → Delete this package → 确认。然后回 Actions 重跑失败的那个 job, 首推会自动重建包, 并把 Actions 权限直接挂到 Stub_front 仓库, 以后不会再报这个错。这个包 2 小时前才创建, 里面顶多一个旧镜像, 删了没损失(CI 每次都会推新的 latest)。
+第 3 步: 到 https://github.com/jimoying/Stub_front/actions 对失败的 run 点 Re-run failed jobs。
+````
