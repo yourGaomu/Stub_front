@@ -5,6 +5,7 @@ import { bytesToMB, formatDateTime, formatMB, mbToBytes } from "@/lib/format";
 import { adminApi } from "@/services/api";
 import { ApiError } from "@/services/api/client";
 import type {
+  APIKeyDTO,
   AdminUserItem,
   BusinessDTO,
   PermissionCatalogItem,
@@ -26,18 +27,21 @@ export default function AdminUsersPage() {
 
   // 管理单用户抽屉
   const [activeUser, setActiveUser] = useState<AdminUserItem | null>(null);
-  const [drawerTab, setDrawerTab] = useState<"permissions" | "businesses" | "quotas">("permissions");
+  const [drawerTab, setDrawerTab] = useState<"permissions" | "businesses" | "quotas" | "apiKeys">("permissions");
   const [catalog, setCatalog] = useState<PermissionCatalogItem[]>([]);
   const [userPerms, setUserPerms] = useState<PermissionState[]>([]);
   const [userBiz, setUserBiz] = useState<UserBusinessItem[]>([]);
   const [allBiz, setAllBiz] = useState<BusinessDTO[]>([]);
   const [quotas, setQuotas] = useState<Quotas | null>(null);
+  const [userApiKeys, setUserApiKeys] = useState<APIKeyDTO[]>([]);
+  const [loadingApiKeys, setLoadingApiKeys] = useState(false);
 
   // 配额表单（十进制 MB）
   const [maxSingleMB, setMaxSingleMB] = useState("20");
   const [storageMB, setStorageMB] = useState("100");
   const [urlLimit, setUrlLimit] = useState("20");
   const [assetLinkLimit, setAssetLinkLimit] = useState("10");
+  const [apiKeyLimit, setApiKeyLimit] = useState("5");
   const [savingQuotas, setSavingQuotas] = useState(false);
 
   const fetchList = useCallback(async () => {
@@ -70,6 +74,18 @@ export default function AdminUsersPage() {
       .catch(() => {});
   }, [fetchList]);
 
+  const fetchUserApiKeys = useCallback(async (userId: string) => {
+    setLoadingApiKeys(true);
+    try {
+      const res = await adminApi.listUserAPIKeys(userId, { page: 1, pageSize: 50 });
+      setUserApiKeys(res.items || []);
+    } catch {
+      setUserApiKeys([]);
+    } finally {
+      setLoadingApiKeys(false);
+    }
+  }, []);
+
   const openUserDrawer = async (u: AdminUserItem) => {
     setActiveUser(u);
     try {
@@ -85,6 +101,8 @@ export default function AdminUsersPage() {
       setStorageMB(String(bytesToMB(q.storageQuotaBytes)));
       setUrlLimit(q.urlLinkQuota === null ? "-1" : String(q.urlLinkQuota));
       setAssetLinkLimit(q.minioAssetLinkQuota === null ? "-1" : String(q.minioAssetLinkQuota));
+      setApiKeyLimit(q.apiKeyQuota === null ? "-1" : String(q.apiKeyQuota));
+      fetchUserApiKeys(u.userId);
     } catch (err) {
       message.error(err instanceof ApiError ? err.message : "读取用户详情失败");
     }
@@ -135,6 +153,7 @@ export default function AdminUsersPage() {
         storageQuotaBytes: mbToBytes(Number(storageMB)),
         urlLinkQuota: Number(urlLimit),
         minioAssetLinkQuota: Number(assetLinkLimit),
+        apiKeyQuota: Number(apiKeyLimit),
       });
       setQuotas(updated);
       message.success("用户配额已更新");
@@ -144,6 +163,27 @@ export default function AdminUsersPage() {
     } finally {
       setSavingQuotas(false);
     }
+  };
+
+  const handleAdminRevokeKey = (k: APIKeyDTO) => {
+    if (!activeUser) return;
+    modal.confirm({
+      title: `管理员强制作废凭证「${k.name}」？`,
+      content: `前缀: ${k.keyPrefix}… 吊销后将立即对该用户的外部机器调用生效，不可恢复。`,
+      okText: "确认吊销",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          await adminApi.revokeAPIKey(k.apiKeyId);
+          message.success("该 API Key 已被管理员永久吊销");
+          fetchUserApiKeys(activeUser.userId);
+          fetchList();
+        } catch (err) {
+          message.error(err instanceof ApiError ? err.message : "吊销失败");
+        }
+      },
+    });
   };
 
   const handleRevokeUserInvites = (u: AdminUserItem) => {
@@ -172,7 +212,7 @@ export default function AdminUsersPage() {
       <div>
         <h1 className="font-cn-display text-[28px] font-black tracking-tight">管理员 · 用户权限、业务与配额</h1>
         <p className="mt-1 text-[13px] text-[var(--ink-2)]">
-          管理用户 10 项扁平权限开关、MinIO 业务桶授权以及十进制 MB 存储与短链数量配额
+          管理用户 14 项扁平权限开关、MinIO 业务桶授权、存储短链配额与 API Key 机器凭证治理
         </p>
       </div>
 
@@ -214,7 +254,7 @@ export default function AdminUsersPage() {
                 <th className="px-4 py-2.5">邮箱 / UserId</th>
                 <th className="px-4 py-2.5">角色 / 邀请来源</th>
                 <th className="px-4 py-2.5">存储已用 / 总额</th>
-                <th className="px-4 py-2.5">短链配额 (URL / 素材)</th>
+                <th className="px-4 py-2.5">配额 (URL / 素材 / API Key)</th>
                 <th className="px-4 py-2.5">权限数 / 业务桶数</th>
                 <th className="px-4 py-2.5 text-right">操作</th>
               </tr>
@@ -241,7 +281,7 @@ export default function AdminUsersPage() {
                   </td>
                   <td className="px-4 py-3 font-mono text-xs">
                     URL: {u.urlLinkUsed}/{u.urlLinkQuota} · 素材: {u.minioAssetLinkUsed}/
-                    {u.minioAssetLinkQuota}
+                    {u.minioAssetLinkQuota} · Key: {u.apiKeyUsed ?? 0}/{u.apiKeyQuota ?? 5}
                   </td>
                   <td className="px-4 py-3 font-mono text-xs">
                     {u.role === "admin" ? "全部权限" : `${u.enabledPermissionCount} 项权限`} ·{" "}
@@ -309,9 +349,10 @@ export default function AdminUsersPage() {
             <div className="inline-flex w-fit gap-1 rounded border border-[var(--line-2)] bg-[var(--paper-3)] p-1">
               {(
                 [
-                  ["permissions", "10 项权限开关"],
+                  ["permissions", "14 项权限开关"],
                   ["businesses", "MinIO 业务桶授权"],
-                  ["quotas", "存储与短链配额"],
+                  ["quotas", "存储与配额"],
+                  ["apiKeys", "API Key 凭证治理"],
                 ] as const
               ).map(([k, label]) => (
                 <button
@@ -459,6 +500,17 @@ export default function AdminUsersPage() {
                       className="h-10 rounded border border-[var(--line-2)] bg-white px-3 font-mono text-sm outline-none"
                     />
                   </div>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-medium text-[var(--ink-2)]">
+                      API Key 数量上限 (个 · 当前已用 {quotas.apiKeyUsed || 0})
+                    </label>
+                    <input
+                      type="number"
+                      value={apiKeyLimit}
+                      onChange={(e) => setApiKeyLimit(e.target.value)}
+                      className="h-10 rounded border border-[var(--line-2)] bg-white px-3 font-mono text-sm outline-none"
+                    />
+                  </div>
                 </div>
 
                 <button
@@ -469,6 +521,82 @@ export default function AdminUsersPage() {
                 >
                   {savingQuotas ? "保存中…" : "保存配额变更"}
                 </button>
+              </div>
+            )}
+
+            {drawerTab === "apiKeys" && (
+              <div className="flex flex-col gap-3">
+                <div className="rounded border-l-[3px] border-[var(--ink)] bg-[var(--paper-2)] p-3 text-xs text-[var(--ink-2)]">
+                  管理员可随时监督该用户的机器调用凭证，监控各凭证累计流量与建链使用情况，必要时可一键吊销异常凭证。
+                </div>
+
+                {userApiKeys.map((k) => {
+                  const kq = k.quotas || k;
+                  return (
+                    <div
+                      key={k.apiKeyId}
+                      className="flex flex-col gap-2 rounded border border-[var(--line-2)] bg-[var(--paper-3)] p-3 text-xs"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-[var(--ink)]">{k.name}</span>
+                          <code className="font-mono text-[11px] text-[var(--ink-3)]">
+                            {k.keyPrefix}
+                          </code>
+                          <span
+                            className={`stub-badge ${
+                              k.status === "active" ? "ok" : k.status === "disabled" ? "neutral" : "bad"
+                            }`}
+                          >
+                            {k.status}
+                          </span>
+                        </div>
+                        {k.status !== "revoked" && (
+                          <button
+                            type="button"
+                            onClick={() => handleAdminRevokeKey(k)}
+                            className="stub-btn ghost !h-6 !px-2 !text-xs text-[var(--danger)]"
+                          >
+                            强制吊销
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 font-mono text-[11px] text-[var(--ink-3)]">
+                        <div>
+                          上传: {formatMB(kq.uploadedBytesUsed)} /{" "}
+                          {kq.maxUploadBytes ? formatMB(kq.maxUploadBytes, 0) : "不限"}
+                        </div>
+                        <div>
+                          建链: {kq.createdLinksUsed} / {kq.maxCreatedLinks ?? "不限"}
+                        </div>
+                        <div>
+                          请求: {kq.requestsUsed} / {kq.maxRequests ?? "不限"}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1 font-mono text-[10px] text-[var(--ink-3)] border-t border-[var(--line-2)] pt-1.5">
+                        <span>桶: {k.businessId}</span>
+                        <span>·</span>
+                        <span>频控: {k.rateLimitPerMin}次/分</span>
+                        <span>·</span>
+                        <span>创建: {formatDateTime(k.createdAt)}</span>
+                        {k.lastUsedAt && (
+                          <>
+                            <span>·</span>
+                            <span>最近调用: {formatDateTime(k.lastUsedAt)}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {!loadingApiKeys && userApiKeys.length === 0 && (
+                  <div className="py-8 text-center text-xs text-[var(--ink-3)]">
+                    该用户尚未创建任何 API Key
+                  </div>
+                )}
               </div>
             )}
           </div>

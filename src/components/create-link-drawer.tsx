@@ -1,6 +1,7 @@
-import { App, Drawer, Modal } from "antd";
+import { App, Drawer, Input, Modal, QRCode, Select } from "antd";
 import dayjs from "dayjs";
-import { useEffect, useState } from "react";
+import { Download, Flame, Globe, PackageCheck } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useCopy } from "@/hooks/use-copy";
 import { formatDateTime, formatMB, getPublicBaseURL } from "@/lib/format";
 import { assetsApi, linksApi, templatesApi } from "@/services/api";
@@ -16,10 +17,13 @@ import type {
 } from "@/services/api/types";
 import { useAuthStore } from "@/stores/auth-store";
 
+export type LinkQuickPreset = "burn" | "delivery" | "public";
+
 interface CreateLinkDrawerProps {
   open: boolean;
   initialTargetType?: "url" | "minio_asset";
   initialAssetId?: string;
+  initialPreset?: LinkQuickPreset | null;
   onClose: () => void;
   onSuccess?: (link: LinkDTO) => void;
 }
@@ -28,6 +32,7 @@ export function CreateLinkDrawer({
   open,
   initialTargetType = "url",
   initialAssetId = "",
+  initialPreset = null,
   onClose,
   onSuccess,
 }: CreateLinkDrawerProps) {
@@ -35,11 +40,15 @@ export function CreateLinkDrawer({
   const copy = useCopy();
   const hasPermission = useAuthStore((s) => s.hasPermission);
   const refreshUsage = useAuthStore((s) => s.refreshUsage);
+  const qrWrapRef = useRef<HTMLDivElement>(null);
 
+  const [activePreset, setActivePreset] = useState<LinkQuickPreset | null>(initialPreset);
   const [targetType, setTargetType] = useState<"url" | "minio_asset">(initialTargetType);
   const [targetUrl, setTargetUrl] = useState("");
   const [assetId, setAssetId] = useState(initialAssetId);
   const [assets, setAssets] = useState<AssetDTO[]>([]);
+  const [title, setTitle] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
 
   const [customCode, setCustomCode] = useState("");
   const [expirePreset, setExpirePreset] = useState<"1d" | "7d" | "30d" | "custom" | "never">("7d");
@@ -62,10 +71,40 @@ export function CreateLinkDrawer({
   const [submitting, setSubmitting] = useState(false);
   const [createdLink, setCreatedLink] = useState<LinkDTO | null>(null);
 
+  const applyPreset = useCallback((preset: LinkQuickPreset) => {
+    setActivePreset(preset);
+    setRuleMode("inline");
+    if (preset === "burn") {
+      // 阅后即焚：1 次有效访问 + 24 小时过期 + 必须口令 + 固定冷却
+      setExpirePreset("1d");
+      setMaxVisits("1");
+      setRequirePassword(true);
+      setStrategy("fixed_cooldown");
+    } else if (preset === "delivery") {
+      // 客户受控交付：10 次访问 + 7 天过期 + 必须口令
+      setExpirePreset("7d");
+      setMaxVisits("10");
+      setRequirePassword(true);
+      setStrategy("fixed_cooldown");
+    } else {
+      // 标准公开分享：不限次数 + 30 天过期 + 无口令
+      setExpirePreset("30d");
+      setMaxVisits("-1");
+      setRequirePassword(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     setTargetType(initialTargetType);
+    setTitle("");
+    setTags([]);
     if (initialAssetId) setAssetId(initialAssetId);
+    if (initialPreset) {
+      applyPreset(initialPreset);
+    } else {
+      setActivePreset(null);
+    }
 
     if (hasPermission("assets.read")) {
       assetsApi
@@ -90,7 +129,7 @@ export function CreateLinkDrawer({
         })
         .catch(() => {});
     }
-  }, [open, initialTargetType, initialAssetId, hasPermission]);
+  }, [open, initialTargetType, initialAssetId, initialPreset, hasPermission, applyPreset]);
 
   useEffect(() => {
     if (!open || ruleMode === "inline" || !selectedTemplateId) {
@@ -138,6 +177,10 @@ export function CreateLinkDrawer({
       message.warning("请选择或输入素材 ID");
       return;
     }
+    if (title.trim().length > 120 || tags.length > 20 || tags.some((tag) => tag.trim().length > 32)) {
+      message.warning("标题最多 120 字，最多 20 个标签且每个标签不超过 32 字");
+      return;
+    }
     if (effectiveRequirePassword && !accessPassword) {
       message.warning("当前规则要求启用访问口令，请填写该短链的访问口令");
       return;
@@ -157,6 +200,8 @@ export function CreateLinkDrawer({
     }
 
     const payload: CreateLinkRequest = {
+      title: title.trim(),
+      tags: tags.map((tag) => tag.trim()).filter(Boolean),
       code: customCode.trim() ? customCode.trim().toLowerCase() : undefined,
       target:
         targetType === "url"
@@ -201,12 +246,24 @@ export function CreateLinkDrawer({
     }
   };
 
+  const handleDownloadQR = () => {
+    if (!createdLink) return;
+    const canvas = qrWrapRef.current?.querySelector<HTMLCanvasElement>("canvas");
+    if (!canvas) return;
+    const a = document.createElement("a");
+    a.download = `stub-${createdLink.code}.png`;
+    a.href = canvas.toDataURL("image/png");
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
   const baseHost = getPublicBaseURL().replace(/^https?:\/\//, "");
 
   return (
     <>
       <Drawer
-        title={<span className="font-cn-display text-xl font-black">新建短链</span>}
+        title={<span className="font-cn-display text-xl font-black">新建受控短链</span>}
         width={560}
         open={open}
         onClose={onClose}
@@ -222,8 +279,99 @@ export function CreateLinkDrawer({
         }
       >
         <div className="flex flex-col gap-5">
+          {/* 00 · 快捷场景预设（含阅后即焚） */}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2.5 font-mono text-[11px] tracking-widest text-[var(--ink-3)]">
+              <span>00 · 快捷受控预设（一键填充参数）</span>
+              <span className="h-px flex-1 bg-[var(--line)]" />
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => applyPreset("burn")}
+                className={`cursor-pointer rounded border p-2.5 text-left transition ${
+                  activePreset === "burn"
+                    ? "border-[var(--signal)] bg-[var(--signal-soft)] shadow-[inset_0_0_0_1px_var(--signal)]"
+                    : "border-[var(--line-2)] bg-[var(--paper-3)]"
+                }`}
+              >
+                <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--signal-ink)]">
+                  <Flame size={14} />
+                  <span>阅后即焚</span>
+                </div>
+                <small className="mt-0.5 block text-[11px] text-[var(--ink-3)]">
+                  限 1 次 + 口令 + 24h
+                </small>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => applyPreset("delivery")}
+                className={`cursor-pointer rounded border p-2.5 text-left transition ${
+                  activePreset === "delivery"
+                    ? "border-[var(--ink)] bg-[var(--paper-3)] shadow-[inset_0_0_0_1px_var(--ink)]"
+                    : "border-[var(--line-2)] bg-[var(--paper-3)]"
+                }`}
+              >
+                <div className="flex items-center gap-1.5 text-xs font-bold">
+                  <PackageCheck size={14} />
+                  <span>客户交付</span>
+                </div>
+                <small className="mt-0.5 block text-[11px] text-[var(--ink-3)]">
+                  限 10 次 + 口令 + 7d
+                </small>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => applyPreset("public")}
+                className={`cursor-pointer rounded border p-2.5 text-left transition ${
+                  activePreset === "public"
+                    ? "border-[var(--ink)] bg-[var(--paper-3)] shadow-[inset_0_0_0_1px_var(--ink)]"
+                    : "border-[var(--line-2)] bg-[var(--paper-3)]"
+                }`}
+              >
+                <div className="flex items-center gap-1.5 text-xs font-bold">
+                  <Globe size={14} />
+                  <span>公开分享</span>
+                </div>
+                <small className="mt-0.5 block text-[11px] text-[var(--ink-3)]">
+                  不限次数 + 无口令 + 30d
+                </small>
+              </button>
+            </div>
+          </div>
+
           <div className="flex items-center gap-2.5 font-mono text-[11px] tracking-widest text-[var(--ink-3)]">
-            <span>01 · 目标（创建后不可修改）</span>
+            <span>01 · 标题与标签（创建后可编辑）</span>
+            <span className="h-px flex-1 bg-[var(--line)]" />
+          </div>
+          <div className="grid gap-3">
+            <label className="flex flex-col gap-1.5 text-xs font-medium text-[var(--ink-2)]">
+              标题 <span className="font-normal text-[var(--ink-3)]">可选，最多 120 字</span>
+              <Input
+                value={title}
+                maxLength={120}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="例如：项目方案预览"
+              />
+            </label>
+            <label className="flex flex-col gap-1.5 text-xs font-medium text-[var(--ink-2)]">
+              标签 <span className="font-normal text-[var(--ink-3)]">可选，最多 20 个</span>
+              <Select
+                mode="tags"
+                value={tags}
+                onChange={(values: string[]) => setTags(values.slice(0, 20))}
+                placeholder="输入后按 Enter 添加标签"
+                tokenSeparators={[",", "，"]}
+                maxTagCount="responsive"
+                options={[]}
+              />
+            </label>
+          </div>
+
+          <div className="flex items-center gap-2.5 font-mono text-[11px] tracking-widest text-[var(--ink-3)]">
+            <span>02 · 目标（创建后不可修改）</span>
             <span className="h-px flex-1 bg-[var(--line)]" />
           </div>
 
@@ -328,7 +476,10 @@ export function CreateLinkDrawer({
                 <button
                   key={k}
                   type="button"
-                  onClick={() => setExpirePreset(k)}
+                  onClick={() => {
+                    setExpirePreset(k);
+                    setActivePreset(null);
+                  }}
                   className={`h-8 cursor-pointer rounded-full border px-3 text-xs ${
                     expirePreset === k
                       ? "border-[var(--ink)] bg-[var(--ink)] text-[var(--paper)]"
@@ -350,7 +501,7 @@ export function CreateLinkDrawer({
           </div>
 
           <div className="flex items-center gap-2.5 font-mono text-[11px] tracking-widest text-[var(--ink-3)]">
-            <span>02 · 访问规则来源（三选一互斥）</span>
+            <span>03 · 访问规则来源（三选一互斥）</span>
             <span className="h-px flex-1 bg-[var(--line)]" />
           </div>
 
@@ -365,7 +516,10 @@ export function CreateLinkDrawer({
               <button
                 key={k}
                 type="button"
-                onClick={() => setRuleMode(k)}
+                onClick={() => {
+                  setRuleMode(k);
+                  if (k !== "inline") setActivePreset(null);
+                }}
                 className={`cursor-pointer rounded border p-2.5 text-left transition ${
                   ruleMode === k
                     ? "border-[var(--ink)] bg-[var(--paper-3)] shadow-[inset_0_0_0_1px_var(--ink)]"
@@ -384,12 +538,15 @@ export function CreateLinkDrawer({
                 <div className="flex flex-col gap-1.5">
                   <label className="flex justify-between text-xs font-medium text-[var(--ink-2)]">
                     <span>最大访问次数</span>
-                    <span className="font-normal text-[var(--ink-3)]">-1 不限 · 0 禁止</span>
+                    <span className="font-normal text-[var(--ink-3)]">1 阅后即焚 · -1 不限</span>
                   </label>
                   <input
                     type="number"
                     value={maxVisits}
-                    onChange={(e) => setMaxVisits(e.target.value)}
+                    onChange={(e) => {
+                      setMaxVisits(e.target.value);
+                      setActivePreset(null);
+                    }}
                     className="h-10 rounded border border-[var(--line-2)] bg-[var(--paper-3)] px-3 font-mono text-sm outline-none"
                   />
                 </div>
@@ -415,7 +572,10 @@ export function CreateLinkDrawer({
                 <input
                   type="checkbox"
                   checked={requirePassword}
-                  onChange={(e) => setRequirePassword(e.target.checked)}
+                  onChange={(e) => {
+                    setRequirePassword(e.target.checked);
+                    setActivePreset(null);
+                  }}
                   className="h-4 w-4 accent-[var(--signal)]"
                 />
               </div>
@@ -546,28 +706,62 @@ export function CreateLinkDrawer({
         open={Boolean(createdLink)}
         onCancel={() => setCreatedLink(null)}
         footer={
-          <button type="button" onClick={() => setCreatedLink(null)} className="stub-btn">
-            完成
-          </button>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={handleDownloadQR} className="stub-btn ghost">
+              <Download size={14} />
+              下载二维码 PNG
+            </button>
+            <button type="button" onClick={() => setCreatedLink(null)} className="stub-btn">
+              完成
+            </button>
+          </div>
         }
         title="短链已创建"
       >
         {createdLink && (
           <div className="flex flex-col gap-4 pt-2">
-            <div className="relative rounded-md border border-[var(--ink)] bg-[var(--paper-3)] p-4">
-              <div className="font-mono text-xs text-[var(--ink-3)]">{createdLink.url}</div>
-              <div className="font-display text-4xl leading-tight">{createdLink.code}</div>
-              <button
-                type="button"
-                onClick={() => copy(createdLink.url, "已复制完整短链 URL")}
-                className="stub-btn signal !h-8 !px-3 !text-xs absolute top-3.5 right-3.5"
+            <div className="flex flex-wrap items-center justify-between gap-4 rounded-md border border-[var(--ink)] bg-[var(--paper-3)] p-4">
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-mono text-xs text-[var(--ink-3)]">{createdLink.url}</div>
+                <div className="font-display text-4xl leading-tight">/r/{createdLink.code}</div>
+                {createdLink.rules.maxVisits === 1 && (
+                  <span className="stub-badge signal mt-1.5">🔥 阅后即焚 · 1 次有效访问后即销毁</span>
+                )}
+                <div className="mt-3">
+                  <button
+                    type="button"
+                    onClick={() => copy(createdLink.url, "已复制完整短链 URL")}
+                    className="stub-btn signal !h-8 !px-3 !text-xs"
+                  >
+                    复制短链
+                  </button>
+                </div>
+              </div>
+
+              <div
+                ref={qrWrapRef}
+                className="rounded border border-[var(--line)] bg-[#fbf9f4] p-2"
+                title="短链二维码"
               >
-                复制短链
-              </button>
+                <QRCode
+                  value={createdLink.url}
+                  size={104}
+                  color="#17150f"
+                  bgColor="#fbf9f4"
+                  icon="/favicon.svg"
+                  iconSize={22}
+                  bordered={false}
+                />
+              </div>
             </div>
+
             <dl className="grid grid-cols-[110px_1fr] gap-y-2 text-xs">
               <dt className="text-[var(--ink-3)]">稳定 LinkId</dt>
               <dd className="font-mono font-medium">{createdLink.linkId}</dd>
+              <dt className="text-[var(--ink-3)]">访问次数上限</dt>
+              <dd className="font-mono">
+                {createdLink.rules.maxVisits === -1 ? "不限 (-1)" : `${createdLink.rules.maxVisits} 次`}
+              </dd>
               <dt className="text-[var(--ink-3)]">有效期至</dt>
               <dd className="font-mono">
                 {createdLink.expiresAt ? formatDateTime(createdLink.expiresAt) : "不过期"}

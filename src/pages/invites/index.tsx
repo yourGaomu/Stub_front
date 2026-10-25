@@ -137,7 +137,7 @@ export default function InvitesPage() {
               管理员：一键作废全部未使用
             </button>
           )}
-          {hasPermission("invites.manage") && (
+          {hasPermission("invites.create_revoke") && (
             <button type="button" onClick={() => setCreateOpen(true)} className="stub-btn signal">
               <Plus size={15} />
               生成邀请码
@@ -208,7 +208,7 @@ export default function InvitesPage() {
                     </td>
                     <td className="px-4 py-3 font-mono text-xs">{formatDateTime(item.expiresAt)}</td>
                     <td className="px-4 py-3 text-right">
-                      {item.status === "active" && hasPermission("invites.manage") && (
+                      {item.status === "active" && hasPermission("invites.create_revoke") && (
                         <button
                           type="button"
                           onClick={() => handleRevoke(item)}

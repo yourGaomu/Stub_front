@@ -1,5 +1,6 @@
 import { request } from "./client";
 import type {
+  APIKeyDTO,
   AccessEvent,
   AdminUserItem,
   AnalyticsResponse,
@@ -7,6 +8,8 @@ import type {
   AuditEvent,
   BusinessDTO,
   BusinessItem,
+  CreateAPIKeyRequest,
+  CreateAPIKeyResponse,
   CreateLinkRequest,
   EmailCodeRequest,
   EmailCodeResponse,
@@ -15,6 +18,8 @@ import type {
   InviteDTO,
   LinkDTO,
   LinkListItem,
+  UpdateLinkMetadataRequest,
+  UpdateLinkRulesRequest,
   LoginRequest,
   LoginResponse,
   PageResponse,
@@ -39,6 +44,7 @@ import type {
   TemplateVersionListItem,
   TemplateVersionRequest,
   UnknownShortCodeEvent,
+  UpdateAPIKeyRequest,
   UsageResponse,
   User,
   UserBusinessItem,
@@ -103,11 +109,25 @@ export const linksApi = {
     workspaceId?: string;
     targetType?: string;
     code?: string;
+    keyword?: string;
+    assetId?: string;
     createdFrom?: string;
     createdTo?: string;
   }) => request<PageResponse<LinkListItem>>("/links", { query: params }),
 
   get: (linkId: string) => request<LinkDTO>(`/links/${encodeURIComponent(linkId)}`),
+
+  updateMetadata: (linkId: string, body: UpdateLinkMetadataRequest) =>
+    request<LinkDTO>(`/links/${encodeURIComponent(linkId)}/metadata`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
+  updateRules: (linkId: string, body: UpdateLinkRulesRequest) =>
+    request<LinkDTO>(`/links/${encodeURIComponent(linkId)}/rules`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
 
   renew: (linkId: string, body: RenewLinkRequest) =>
     request<RenewLinkResponse>(`/links/${encodeURIComponent(linkId)}/renew`, {
@@ -369,5 +389,47 @@ export const adminApi = {
   }) =>
     request<PageResponse<UnknownShortCodeEvent>>("/admin/security-events/unknown-short-codes", {
       query: params,
+    }),
+
+  listUserAPIKeys: (userId: string, params?: { status?: string; page?: number; pageSize?: number }) =>
+    request<PageResponse<APIKeyDTO>>(`/admin/users/${encodeURIComponent(userId)}/api-keys`, {
+      query: params,
+    }),
+
+  revokeAPIKey: (apiKeyId: string) =>
+    request<void>(`/admin/api-keys/${encodeURIComponent(apiKeyId)}/revoke`, {
+      method: "POST",
+    }),
+};
+
+export const apiKeysApi = {
+  list: (params?: { status?: string; page?: number; pageSize?: number }) =>
+    request<PageResponse<APIKeyDTO>>("/api-keys", { query: params }),
+
+  create: (body: CreateAPIKeyRequest) =>
+    request<CreateAPIKeyResponse>("/api-keys", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  update: (apiKeyId: string, body: UpdateAPIKeyRequest) =>
+    request<APIKeyDTO>(`/api-keys/${encodeURIComponent(apiKeyId)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+
+  disable: (apiKeyId: string) =>
+    request<APIKeyDTO>(`/api-keys/${encodeURIComponent(apiKeyId)}/disable`, {
+      method: "POST",
+    }),
+
+  enable: (apiKeyId: string) =>
+    request<APIKeyDTO>(`/api-keys/${encodeURIComponent(apiKeyId)}/enable`, {
+      method: "POST",
+    }),
+
+  revoke: (apiKeyId: string) =>
+    request<APIKeyDTO>(`/api-keys/${encodeURIComponent(apiKeyId)}/revoke`, {
+      method: "POST",
     }),
 };

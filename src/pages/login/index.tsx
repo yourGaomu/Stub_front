@@ -1,10 +1,11 @@
 import { App } from "antd";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Moon, Sun } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { authApi } from "@/services/api";
 import { ApiError } from "@/services/api/client";
 import { getDeviceInfo, useAuthStore } from "@/stores/auth-store";
+import { useThemeStore } from "@/stores/theme-store";
 
 type AuthMode = "login" | "register" | "done" | "reset" | "reset-ok";
 
@@ -24,6 +25,7 @@ export default function LoginPage() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const setLoginResult = useAuthStore((s) => s.setLoginResult);
+  const { dark, toggleTheme } = useThemeStore();
 
   const initialMode: AuthMode = location.pathname.includes("register")
     ? "register"
@@ -147,7 +149,7 @@ export default function LoginPage() {
   return (
     <div className="grid min-h-screen lg:grid-cols-[1fr_560px]">
       {/* 左侧品牌与实时访问流 */}
-      <aside className="relative hidden flex-col overflow-hidden bg-[var(--ink)] px-14 py-10 text-[var(--paper)] lg:flex">
+      <aside className="relative hidden flex-col overflow-hidden bg-[#17150f] px-14 py-10 text-[#f2eee4] lg:flex">
         <div
           className="pointer-events-none absolute inset-0"
           style={{
@@ -200,7 +202,7 @@ export default function LoginPage() {
                 </div>
               );
             })}
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-b from-transparent to-[var(--ink)]" />
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-14 bg-gradient-to-b from-transparent to-[#17150f]" />
           </div>
         </div>
 
@@ -216,7 +218,17 @@ export default function LoginPage() {
           <Link to="/" className="hover:text-[var(--ink)]">
             ← 返回产品页
           </Link>
-          <span>使用短链服务账号登录</span>
+          <div className="flex items-center gap-3">
+            <span>使用短链服务账号登录</span>
+            <button
+              type="button"
+              onClick={toggleTheme}
+              title={dark ? "切换为暖纸浅色" : "切换为夜墨深色"}
+              className="cursor-pointer rounded p-1.5 text-[var(--ink-2)] hover:bg-black/5 hover:text-[var(--ink)]"
+            >
+              {dark ? <Sun size={15} /> : <Moon size={15} />}
+            </button>
+          </div>
         </div>
 
         <div className="my-auto py-10">

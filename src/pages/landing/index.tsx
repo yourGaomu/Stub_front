@@ -1,7 +1,9 @@
+import { Moon, Sun } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { getPublicBaseURL } from "@/lib/format";
 import { useAuthStore } from "@/stores/auth-store";
+import { useThemeStore } from "@/stores/theme-store";
 
 const MARQUEE_ITEMS = [
   "HTTPS URL 目标",
@@ -17,6 +19,7 @@ const MARQUEE_ITEMS = [
 
 export default function LandingPage() {
   const token = useAuthStore((s) => s.token);
+  const { dark, toggleTheme } = useThemeStore();
   const [codeTab, setCodeTab] = useState<"http" | "go">("http");
   const baseHost = getPublicBaseURL().replace(/^https?:\/\//, "");
 
@@ -53,6 +56,14 @@ export default function LandingPage() {
             </li>
           </ul>
           <div className="ml-auto flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={toggleTheme}
+              title={dark ? "切换为暖纸浅色" : "切换为夜墨深色"}
+              className="stub-btn ghost !w-9.5 !px-0"
+            >
+              {dark ? <Sun size={15} /> : <Moon size={15} />}
+            </button>
             {token ? (
               <Link to="/console" className="stub-btn signal">
                 进入控制台 →
