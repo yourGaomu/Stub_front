@@ -1,6 +1,8 @@
-import { Copy, Plus } from "lucide-react";
+import { Copy, Flame, Plus, QrCode } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
+import type { LinkQuickPreset } from "@/components/create-link-drawer";
+import { LinkQRModal } from "@/components/link-qr-modal";
 import { useCopy } from "@/hooks/use-copy";
 import { formatDateTime, formatMB } from "@/lib/format";
 import { linksApi, logsApi } from "@/services/api";
@@ -8,7 +10,7 @@ import type { AnalyticsResponse, LinkListItem } from "@/services/api/types";
 import { useAuthStore } from "@/stores/auth-store";
 
 interface ConsoleOutletContext {
-  openCreateLink: () => void;
+  openCreateLink: (preset?: LinkQuickPreset) => void;
 }
 
 const AVAILABILITY_BADGE: Record<string, { label: string; cls: string }> = {
@@ -27,6 +29,7 @@ export default function OverviewPage() {
   const [analytics, setAnalytics] = useState<AnalyticsResponse | null>(null);
   const [recentLinks, setRecentLinks] = useState<LinkListItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [qrTarget, setQrTarget] = useState<{ code: string; url: string } | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -76,6 +79,10 @@ export default function OverviewPage() {
     usage?.minioAssetLinks.limit && usage.minioAssetLinks.limit > 0
       ? Math.min(100, (usage.minioAssetLinks.used / usage.minioAssetLinks.limit) * 100)
       : 0;
+  const apiKeyPercent =
+    usage?.apiKeys?.limit && usage.apiKeys.limit > 0
+      ? Math.min(100, (usage.apiKeys.used / usage.apiKeys.limit) * 100)
+      : 0;
 
   const series = analytics?.series || [];
   const maxRequestInBucket = Math.max(1, ...series.map((b) => b.requestCount));
@@ -105,15 +112,24 @@ export default function OverviewPage() {
               </button>
             ))}
           </div>
-          <button type="button" onClick={openCreateLink} className="stub-btn signal !h-9">
+          <button
+            type="button"
+            onClick={() => openCreateLink("burn")}
+            className="stub-btn ghost !h-9"
+            title="1 次访问 + 口令保护 + 24 小时过期"
+          >
+            <Flame size={15} className="text-[var(--signal)]" />
+            阅后即焚
+          </button>
+          <button type="button" onClick={() => openCreateLink()} className="stub-btn signal !h-9">
             <Plus size={15} />
             新建短链
           </button>
         </div>
       </div>
 
-      {/* 账户与额度 3 列 */}
-      <div className="grid grid-cols-1 divide-y divide-[var(--line)] overflow-hidden rounded-md border border-[var(--line-2)] bg-[var(--paper-3)] md:grid-cols-3 md:divide-x md:divide-y-0">
+      {/* 账户与额度 4 列 */}
+      <div className="grid grid-cols-1 divide-y divide-[var(--line)] overflow-hidden rounded-md border border-[var(--line-2)] bg-[var(--paper-3)] sm:grid-cols-2 lg:grid-cols-4 sm:divide-x sm:divide-y-0">
         <div className="p-5">
           <div className="flex justify-between font-mono text-[11px] text-[var(--ink-3)]">
             <span>STORAGE · 总存储额度</span>
@@ -171,6 +187,28 @@ export default function OverviewPage() {
             剩余{" "}
             {usage?.minioAssetLinks.remaining === null ? "不限" : (usage?.minioAssetLinks.remaining ?? "—")}{" "}
             条 · 同素材多短链不重复扣存储
+          </div>
+        </div>
+
+        <div className="p-5">
+          <div className="flex justify-between font-mono text-[11px] text-[var(--ink-3)]">
+            <span>API KEYS · 机器调用凭证</span>
+            <span>工作流与脚本</span>
+          </div>
+          <div className="mt-2 font-display text-4xl leading-none">
+            {usage?.apiKeys?.used ?? 0}{" "}
+            <small className="font-sans text-sm text-[var(--ink-3)]">
+              / {usage?.apiKeys?.limit === null ? "不限" : (usage?.apiKeys?.limit ?? "—")} 个
+            </small>
+          </div>
+          <div className="my-2.5 h-1.5 overflow-hidden rounded bg-[var(--line)]">
+            <i className="block h-full bg-[var(--ink)]" style={{ width: `${apiKeyPercent}%` }} />
+          </div>
+          <div className="text-xs text-[var(--ink-2)]">
+            剩余 {usage?.apiKeys?.remaining === null ? "不限" : (usage?.apiKeys?.remaining ?? "—")} 个 ·{" "}
+            <Link to="/console/api-keys" className="text-[var(--signal)] underline">
+              管理凭证
+            </Link>
           </div>
         </div>
       </div>
@@ -341,19 +379,32 @@ export default function OverviewPage() {
                     </td>
                     <td className="px-4 py-3 font-mono text-xs">
                       {item.visitsUsed} / {item.maxVisits === -1 ? "∞" : item.maxVisits}
+                      {item.maxVisits === 1 && (
+                        <span className="stub-badge signal ml-1.5">阅后即焚</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs">
                       {item.expiresAt ? formatDateTime(item.expiresAt) : "不过期"}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => copy(item.url, "已复制短链 URL")}
-                        className="stub-btn ghost !h-7 !px-2.5 !text-xs"
-                      >
-                        <Copy size={12} />
-                        复制
-                      </button>
+                      <div className="flex justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setQrTarget({ code: item.code, url: item.url })}
+                          className="stub-btn ghost !h-7 !px-2.5 !text-xs"
+                        >
+                          <QrCode size={12} />
+                          二维码
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => copy(item.url, "已复制短链 URL")}
+                          className="stub-btn ghost !h-7 !px-2.5 !text-xs"
+                        >
+                          <Copy size={12} />
+                          复制
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );
@@ -369,6 +420,13 @@ export default function OverviewPage() {
           </table>
         </div>
       </div>
+
+      <LinkQRModal
+        open={Boolean(qrTarget)}
+        code={qrTarget?.code || ""}
+        url={qrTarget?.url || ""}
+        onClose={() => setQrTarget(null)}
+      />
     </div>
   );
 }

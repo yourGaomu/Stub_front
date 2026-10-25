@@ -1,7 +1,85 @@
 import type { ThemeConfig } from "antd";
 import { theme as antdTheme } from "antd";
 
-export function getAntThemeConfig(): ThemeConfig {
+export function getAntThemeConfig(dark = false): ThemeConfig {
+  if (dark) {
+    return {
+      algorithm: antdTheme.darkAlgorithm,
+      cssVar: { key: "stub-paper-theme" },
+      token: {
+        colorPrimary: "#ff5929",
+        colorInfo: "#f2eee4",
+        colorSuccess: "#46b874",
+        colorWarning: "#e0a326",
+        colorError: "#ec5b40",
+        colorLink: "#ff7a52",
+        colorLinkHover: "#ff5929",
+        colorLinkActive: "#f2eee4",
+        colorBgBase: "#141310",
+        colorBgContainer: "#22201b",
+        colorBgElevated: "#22201b",
+        colorBgLayout: "#141310",
+        colorTextBase: "#f2eee4",
+        colorTextSecondary: "#b8b1a1",
+        colorTextTertiary: "#7d7769",
+        colorBorder: "#403c33",
+        colorBorderSecondary: "#302d26",
+        borderRadius: 4,
+        fontFamily: '"Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif',
+        controlItemBgHover: "rgba(242, 238, 228, 0.08)",
+        controlItemBgActive: "rgba(242, 238, 228, 0.14)",
+        controlItemBgActiveHover: "rgba(242, 238, 228, 0.18)",
+      },
+      components: {
+        Button: {
+          primaryShadow: "none",
+          defaultBg: "#22201b",
+          defaultBorderColor: "#403c33",
+        },
+        Card: {
+          colorBgContainer: "#22201b",
+          colorBorderSecondary: "#302d26",
+        },
+        Dropdown: {
+          colorBgElevated: "#22201b",
+          colorText: "#f2eee4",
+          controlItemBgHover: "rgba(242, 238, 228, 0.08)",
+          controlItemBgActive: "rgba(242, 238, 228, 0.14)",
+          controlItemBgActiveHover: "rgba(242, 238, 228, 0.18)",
+        },
+        Menu: {
+          popupBg: "#22201b",
+          itemActiveBg: "rgba(242, 238, 228, 0.12)",
+          itemHoverBg: "rgba(242, 238, 228, 0.08)",
+          itemSelectedBg: "#f2eee4",
+          itemSelectedColor: "#141310",
+        },
+        Select: {
+          colorBgContainer: "#22201b",
+          colorBgElevated: "#22201b",
+          optionActiveBg: "rgba(242, 238, 228, 0.08)",
+          optionSelectedBg: "rgba(242, 238, 228, 0.16)",
+          optionSelectedColor: "#f2eee4",
+        },
+        Table: {
+          headerBg: "#1c1a16",
+          headerColor: "#7d7769",
+          rowHoverBg: "#2a2721",
+          rowSelectedBg: "rgba(242, 238, 228, 0.08)",
+          rowSelectedHoverBg: "rgba(242, 238, 228, 0.12)",
+          borderColor: "#302d26",
+        },
+        Modal: {
+          contentBg: "#1c1a16",
+          headerBg: "#1c1a16",
+        },
+        Drawer: {
+          colorBgElevated: "#1c1a16",
+        },
+      },
+    };
+  }
+
   return {
     algorithm: antdTheme.defaultAlgorithm,
     cssVar: { key: "stub-paper-theme" },

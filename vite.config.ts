@@ -7,7 +7,7 @@ const rootDir = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, rootDir, "");
-  const apiTarget = env.VITE_API_PROXY_TARGET || "http://localhost:8588";
+  const apiTarget = env.VITE_API_PROXY_TARGET || "http://localhost:8080";
 
   return {
     plugins: [react()],

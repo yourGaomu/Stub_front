@@ -5,6 +5,7 @@ import AdminBusinessesPage from "@/pages/admin/businesses";
 import AdminSecurityPage from "@/pages/admin/security";
 import AdminSettingsPage from "@/pages/admin/settings";
 import AdminUsersPage from "@/pages/admin/users";
+import ApiKeysPage from "@/pages/api-keys";
 import AssetsPage from "@/pages/assets";
 import InvitesPage from "@/pages/invites";
 import LandingPage from "@/pages/landing";
@@ -40,6 +41,7 @@ export const router = createBrowserRouter([
       { path: "assets", element: <AssetsPage /> },
       { path: "templates", element: <TemplatesPage /> },
       { path: "invites", element: <InvitesPage /> },
+      { path: "api-keys", element: <ApiKeysPage /> },
       { path: "logs", element: <LogsPage /> },
       { path: "account", element: <AccountPage /> },
       { path: "admin/users", element: <AdminUsersPage /> },

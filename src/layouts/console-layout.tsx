@@ -1,25 +1,31 @@
-import { App } from "antd";
+import { App, Drawer } from "antd";
 import {
   Briefcase,
   FileText,
+  Flame,
   FolderOpen,
+  KeyRound,
   LayoutGrid,
   Link2,
   LogOut,
+  Menu,
+  Moon,
   Plus,
   Search,
   Settings,
   ShieldAlert,
+  Sun,
   Ticket,
   UserCircle,
   Users,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { CreateLinkDrawer } from "@/components/create-link-drawer";
+import { CreateLinkDrawer, type LinkQuickPreset } from "@/components/create-link-drawer";
 import { formatMB } from "@/lib/format";
 import { authApi } from "@/services/api";
 import { useAuthStore } from "@/stores/auth-store";
+import { useThemeStore } from "@/stores/theme-store";
 
 const NAV_LABELS: Record<string, string> = {
   "/console": "概览",
@@ -27,6 +33,7 @@ const NAV_LABELS: Record<string, string> = {
   "/console/assets": "素材",
   "/console/templates": "规则模板",
   "/console/invites": "邀请码",
+  "/console/api-keys": "API Key 凭证",
   "/console/logs": "日志",
   "/console/account": "账号与会话",
   "/console/admin/users": "用户管理",
@@ -39,10 +46,19 @@ export default function ConsoleLayout() {
   const { message } = App.useApp();
   const navigate = useNavigate();
   const location = useLocation();
-  const { token, user, isAdmin, usage, initialized, refreshBootstrap, logout } = useAuthStore();
+  const { token, user, isAdmin, usage, initialized, hasPermission, refreshBootstrap, logout } =
+    useAuthStore();
+  const { dark, toggleTheme } = useThemeStore();
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [createPreset, setCreatePreset] = useState<LinkQuickPreset | null>(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [quickCode, setQuickCode] = useState("");
+
+  const openCreateLink = (preset?: LinkQuickPreset) => {
+    setCreatePreset(preset ?? null);
+    setCreateOpen(true);
+  };
 
   useEffect(() => {
     if (!token) {
@@ -115,6 +131,7 @@ export default function ConsoleLayout() {
             { to: "/console/assets", label: "素材", icon: FolderOpen },
             { to: "/console/templates", label: "规则模板", icon: FileText },
             { to: "/console/invites", label: "邀请码", icon: Ticket },
+            { to: "/console/api-keys", label: "API Key", icon: KeyRound },
             { to: "/console/logs", label: "日志", icon: FileText },
             { to: "/console/account", label: "账号与会话", icon: UserCircle },
           ].map((item) => {
@@ -214,6 +231,14 @@ export default function ConsoleLayout() {
       {/* 主内容 */}
       <main className="min-w-0">
         <header className="sticky top-0 z-20 flex h-15 items-center gap-3.5 border-b border-[var(--line)] bg-[var(--paper)]/90 px-6 backdrop-blur-md md:px-8">
+          <button
+            type="button"
+            onClick={() => setMobileMenuOpen(true)}
+            className="cursor-pointer rounded p-1.5 text-[var(--ink-2)] hover:bg-black/5 md:hidden"
+            aria-label="打开导航菜单"
+          >
+            <Menu size={18} />
+          </button>
           <div className="text-[13px] text-[var(--ink-3)]">
             默认空间 / <b className="font-semibold text-[var(--ink)]">{currentCrumb}</b>
           </div>
@@ -228,19 +253,104 @@ export default function ConsoleLayout() {
             />
           </form>
 
-          <button type="button" onClick={() => setCreateOpen(true)} className="stub-btn signal !h-9 !px-3.5 text-xs">
-            <Plus size={15} />
-            新建短链
+          <button
+            type="button"
+            onClick={toggleTheme}
+            title={dark ? "切换为暖纸浅色" : "切换为夜墨深色"}
+            className="cursor-pointer rounded p-2 text-[var(--ink-2)] hover:bg-black/5 hover:text-[var(--ink)] ml-auto sm:ml-0"
+          >
+            {dark ? <Sun size={16} /> : <Moon size={16} />}
           </button>
+
+          {(hasPermission("links.create_url") || hasPermission("links.create_asset")) && (
+            <>
+              <button
+                type="button"
+                onClick={() => openCreateLink("burn")}
+                className="stub-btn ghost !h-9 !px-3 text-xs hidden sm:inline-flex"
+                title="一键配置：1 次访问 + 口令保护 + 24 小时过期"
+              >
+                <Flame size={14} className="text-[var(--signal)]" />
+                阅后即焚
+              </button>
+              <button
+                type="button"
+                onClick={() => openCreateLink()}
+                className="stub-btn signal !h-9 !px-3.5 text-xs"
+              >
+                <Plus size={15} />
+                新建短链
+              </button>
+            </>
+          )}
         </header>
 
         <div className="mx-auto max-w-[1360px] px-6 pt-7 pb-20 md:px-8">
-          <Outlet context={{ openCreateLink: () => setCreateOpen(true) }} />
+          <Outlet context={{ openCreateLink }} />
         </div>
       </main>
 
+      <Drawer
+        title={
+          <Link
+            to="/"
+            onClick={() => setMobileMenuOpen(false)}
+            className="flex items-center gap-2 font-display text-2xl leading-none"
+          >
+            <img src="/favicon.svg" alt="Stub" className="h-6 w-6 shrink-0" />
+            <span>Stub</span>
+          </Link>
+        }
+        placement="left"
+        width={256}
+        open={mobileMenuOpen}
+        onClose={() => setMobileMenuOpen(false)}
+      >
+        <nav className="flex flex-col gap-1 text-sm">
+          {[
+            { to: "/console", label: "概览", icon: LayoutGrid, end: true },
+            { to: "/console/links", label: "短链", icon: Link2 },
+            { to: "/console/assets", label: "素材", icon: FolderOpen },
+            { to: "/console/templates", label: "规则模板", icon: FileText },
+            { to: "/console/invites", label: "邀请码", icon: Ticket },
+            { to: "/console/api-keys", label: "API Key 凭证", icon: KeyRound },
+            { to: "/console/logs", label: "日志", icon: FileText },
+            { to: "/console/account", label: "账号与会话", icon: UserCircle },
+            ...(isAdmin
+              ? [
+                  { to: "/console/admin/users", label: "管理员 · 用户管理", icon: Users },
+                  { to: "/console/admin/businesses", label: "管理员 · 业务登记", icon: Briefcase },
+                  { to: "/console/admin/settings", label: "管理员 · 注册设置", icon: Settings },
+                  { to: "/console/admin/security", label: "管理员 · 安全事件", icon: ShieldAlert },
+                ]
+              : []),
+          ].map((item) => {
+            const Icon = item.icon;
+            return (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                onClick={() => setMobileMenuOpen(false)}
+                className={({ isActive }) =>
+                  `flex items-center gap-2.5 rounded px-3 py-2.5 transition ${
+                    isActive
+                      ? "bg-[var(--ink)] text-[var(--paper)]"
+                      : "text-[var(--ink-2)] hover:bg-black/5 hover:text-[var(--ink)]"
+                  }`
+                }
+              >
+                <Icon size={16} />
+                <span>{item.label}</span>
+              </NavLink>
+            );
+          })}
+        </nav>
+      </Drawer>
+
       <CreateLinkDrawer
         open={createOpen}
+        initialPreset={createPreset}
         onClose={() => setCreateOpen(false)}
         onSuccess={() => {
           window.dispatchEvent(new CustomEvent("stub:link-created"));

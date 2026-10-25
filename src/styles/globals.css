@@ -24,6 +24,27 @@
   --font-mono: "IBM Plex Mono", "Cascadia Mono", Consolas, monospace;
 }
 
+html.dark {
+  color-scheme: dark;
+  --paper: #141310;
+  --paper-2: #1c1a16;
+  --paper-3: #22201b;
+  --ink: #f2eee4;
+  --ink-2: #b8b1a1;
+  --ink-3: #7d7769;
+  --line: #302d26;
+  --line-2: #403c33;
+  --signal: #ff5929;
+  --signal-ink: #ff7a52;
+  --signal-soft: rgba(255, 89, 41, 0.16);
+  --ok: #46b874;
+  --ok-soft: rgba(70, 184, 116, 0.16);
+  --warn: #e0a326;
+  --warn-soft: rgba(224, 163, 38, 0.16);
+  --danger: #ec5b40;
+  --danger-soft: rgba(236, 91, 64, 0.16);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -40,6 +61,7 @@ body {
   background: var(--paper);
   font-size: 14px;
   line-height: 1.6;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 .font-display {
@@ -64,6 +86,11 @@ body {
   opacity: 0.32;
   mix-blend-mode: multiply;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .08 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+html.dark .grain::before {
+  opacity: 0.14;
+  mix-blend-mode: screen;
 }
 
 /* 票根品牌 Logo 缺口印章 */
@@ -144,21 +171,38 @@ body {
   cursor: not-allowed;
 }
 
-/* 票根状态标签 */
+/* 短码铭牌与状态徽标 */
+.stub-code {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--line-2);
+  background: var(--paper-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.stub-badge,
 .stub-tag {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   height: 22px;
   padding: 0 8px;
-  border-radius: 3px;
-  font-size: 12px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 11px;
   font-weight: 500;
   background: var(--paper-2);
   color: var(--ink-2);
+  border: 1px solid var(--line);
   white-space: nowrap;
 }
 
+.stub-badge::before,
 .stub-tag::before {
   content: "";
   width: 6px;
@@ -167,33 +211,70 @@ body {
   background: currentColor;
 }
 
+.stub-badge.plain::before,
 .stub-tag.plain::before {
   display: none;
 }
 
+.stub-badge.ok,
 .stub-tag.ok {
   background: var(--ok-soft);
   color: var(--ok);
+  border-color: transparent;
 }
 
+.stub-badge.warn,
 .stub-tag.warn {
   background: var(--warn-soft);
   color: var(--warn);
+  border-color: transparent;
 }
 
+.stub-badge.bad,
+.stub-badge.danger,
 .stub-tag.danger {
   background: var(--danger-soft);
   color: var(--danger);
+  border-color: transparent;
 }
 
+.stub-badge.signal,
 .stub-tag.signal {
   background: var(--signal-soft);
   color: var(--signal-ink);
+  border-color: transparent;
+}
+
+.stub-badge.neutral {
+  background: var(--paper-2);
+  color: var(--ink-2);
 }
 
 .stub-tag.ink {
   background: var(--ink);
   color: var(--paper);
+}
+
+/* 深色模式全局适配（避免在业务组件内写 dark 分支） */
+html.dark .hover\:bg-\[\#fffdf8\]:hover {
+  background-color: #2a2721 !important;
+}
+
+html.dark .hover\:bg-black\/5:hover {
+  background-color: rgba(242, 238, 228, 0.08) !important;
+}
+
+html.dark .bg-black\/5 {
+  background-color: rgba(242, 238, 228, 0.07) !important;
+}
+
+html.dark .bg-white {
+  background-color: var(--paper-2) !important;
+}
+
+html.dark .bg-\[\#fdf6e9\],
+html.dark .bg-\[\#fff5f0\] {
+  background-color: var(--paper-2) !important;
 }
 
 @keyframes rise {
