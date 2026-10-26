@@ -192,8 +192,8 @@ export default function OverviewPage() {
 
         <div className="p-5">
           <div className="flex justify-between font-mono text-[11px] text-[var(--ink-3)]">
-            <span>API KEYS · 机器调用凭证</span>
-            <span>工作流与脚本</span>
+            <span>API KEYS · 机器与 Agent 凭证</span>
+            <span>REST API & MCP</span>
           </div>
           <div className="mt-2 font-display text-4xl leading-none">
             {usage?.apiKeys?.used ?? 0}{" "}

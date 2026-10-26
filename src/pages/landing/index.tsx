@@ -20,7 +20,7 @@ const MARQUEE_ITEMS = [
 export default function LandingPage() {
   const token = useAuthStore((s) => s.token);
   const { dark, toggleTheme } = useThemeStore();
-  const [codeTab, setCodeTab] = useState<"http" | "go">("http");
+  const [codeTab, setCodeTab] = useState<"http" | "go" | "mcp">("http");
   const baseHost = getPublicBaseURL().replace(/^https?:\/\//, "");
 
   return (
@@ -467,6 +467,20 @@ export default function LandingPage() {
                   <p className="text-xs text-[var(--ink-3)]">按 24h / 7d / 30d 查询访问统计汇总</p>
                 </div>
               </li>
+              <li className="flex gap-4 py-3.5">
+                <span className="h-fit min-w-[52px] rounded bg-[#10b981] px-2 py-0.5 text-center font-mono text-[11px] text-white">
+                  POST
+                </span>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <code className="font-mono text-[13px]">/api/mcp</code>
+                    <span className="rounded bg-[#10b981]/15 px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#059669]">
+                      AI Agent · MCP 协议
+                    </span>
+                  </div>
+                  <p className="text-xs text-[var(--ink-3)]">官方最新 Streamable HTTP 规范，Cursor / Claude / Agent 免安装直接挂载</p>
+                </div>
+              </li>
             </ul>
           </div>
 
@@ -490,6 +504,15 @@ export default function LandingPage() {
               >
                 Go SDK
               </button>
+              <button
+                type="button"
+                onClick={() => setCodeTab("mcp")}
+                className={`cursor-pointer px-4 py-3 font-mono text-xs ${
+                  codeTab === "mcp" ? "text-white shadow-[inset_0_-2px_0_var(--signal)]" : "text-[#8a8475]"
+                }`}
+              >
+                AI Agent (MCP)
+              </button>
             </div>
             {codeTab === "http" ? (
               <pre className="overflow-x-auto p-6 font-mono text-[13px] leading-[1.75]">
@@ -508,7 +531,7 @@ X-Client-App: shortlink_web
   }
 }`}
               </pre>
-            ) : (
+            ) : codeTab === "go" ? (
               <pre className="overflow-x-auto p-6 font-mono text-[13px] leading-[1.75]">
                 {`client, err := shortlink.NewClient(shortlink.Config{
     BaseURL:     "${getPublicBaseURL()}",
@@ -525,6 +548,20 @@ link, _ := client.Links.Create(ctx, shortlink.CreateLinkRequest{
     Target:     shortlink.AssetTarget(asset.AssetID),
     RuleSource: shortlink.InlineRules(shortlink.LinkRules{MaxVisits: 50}),
 })`}
+              </pre>
+            ) : (
+              <pre className="overflow-x-auto p-6 font-mono text-[13px] leading-[1.75]">
+                {`// Claude Desktop / Cursor / Antigravity 配置
+{
+  "mcpServers": {
+    "short-links": {
+      "url": "${getPublicBaseURL()}/api/mcp",
+      "headers": {
+        "Authorization": "Bearer stub_sk_YOUR_KEY"
+      }
+    }
+  }
+}`}
               </pre>
             )}
           </div>

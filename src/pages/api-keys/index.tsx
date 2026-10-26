@@ -74,7 +74,7 @@ export default function ApiKeysPage() {
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [keyword, setKeyword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [snippetTab, setSnippetTab] = useState<"links" | "assets">("links");
+  const [snippetTab, setSnippetTab] = useState<"links" | "assets" | "mcp">("links");
 
   // 新建 API Key 弹窗
   const [createOpen, setCreateOpen] = useState(false);
@@ -368,9 +368,12 @@ export default function ApiKeysPage() {
             <span className="rounded border border-[var(--ink)] bg-[var(--ink)] px-2 py-0.5 font-mono text-[11px] font-bold text-[var(--paper)]">
               M2M / stub_sk_
             </span>
+            <span className="rounded border border-[#10b981]/30 bg-[#ecfdf5] px-2 py-0.5 font-mono text-[11px] font-bold text-[#059669]">
+              支持 MCP (AI Agent)
+            </span>
           </div>
           <p className="mt-1 text-[13px] text-[var(--ink-2)]">
-            面向工业系统、工作流脚本与自动化工具的长期调用密钥 · 采用 <code>baseURL + apiKey</code>，无需模拟用户登录
+            面向工业系统、工作流脚本及 AI Agent (MCP 协议) 的长期调用密钥 · 支持 <code>REST API</code> 与 <code>MCP Streamable HTTP</code> 原生调用
           </p>
         </div>
 
@@ -423,19 +426,47 @@ export default function ApiKeysPage() {
               >
                 2. 上传素材
               </button>
+              <button
+                type="button"
+                onClick={() => setSnippetTab("mcp")}
+                className={`cursor-pointer rounded px-2.5 py-0.5 ${
+                  snippetTab === "mcp"
+                    ? "bg-[var(--ink)] text-[var(--paper)]"
+                    : "text-[var(--ink-2)]"
+                }`}
+              >
+                3. AI Agent (MCP)
+              </button>
             </div>
             <button
               type="button"
               onClick={() => {
-                const code =
-                  snippetTab === "links"
-                    ? `curl -X POST "${publicBase}/api/v1/links" \\\n  -H "Authorization: Bearer stub_sk_YOUR_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"target":{"type":"url","url":"https://example.com"}}'`
-                    : `curl -X POST "${publicBase}/api/v1/assets" \\\n  -H "Authorization: Bearer stub_sk_YOUR_KEY" \\\n  -F "file=@example.jpg"`;
-                copy(code, "已复制 curl 命令");
+                let code = "";
+                if (snippetTab === "links") {
+                  code = `curl -X POST "${publicBase}/api/v1/links" \\\n  -H "Authorization: Bearer stub_sk_YOUR_KEY" \\\n  -H "Content-Type: application/json" \\\n  -d '{"target":{"type":"url","url":"https://example.com"}}'`;
+                } else if (snippetTab === "assets") {
+                  code = `curl -X POST "${publicBase}/api/v1/assets" \\\n  -H "Authorization: Bearer stub_sk_YOUR_KEY" \\\n  -F "file=@example.jpg"`;
+                } else {
+                  code = JSON.stringify(
+                    {
+                      mcpServers: {
+                        "short-links": {
+                          url: `${publicBase}/api/mcp`,
+                          headers: {
+                            Authorization: "Bearer stub_sk_YOUR_KEY",
+                          },
+                        },
+                      },
+                    },
+                    null,
+                    2
+                  );
+                }
+                copy(code, snippetTab === "mcp" ? "已复制 MCP 客户端配置" : "已复制 curl 命令");
               }}
               className="stub-btn ghost !h-6 !px-2 !text-[11px]"
             >
-              <Copy size={11} /> 复制 curl 命令
+              <Copy size={11} /> {snippetTab === "mcp" ? "复制 MCP 配置" : "复制 curl 命令"}
             </button>
           </div>
         </div>
@@ -469,12 +500,26 @@ export default function ApiKeysPage() {
               &nbsp;&nbsp;-H "Content-Type: application/json" \<br />
               &nbsp;&nbsp;-d '{'{"target":{"type":"url","url":"https://example.com"}}'}'
             </code>
-          ) : (
+          ) : snippetTab === "assets" ? (
             <code>
               curl -X POST "{publicBase}/api/v1/assets" \<br />
               &nbsp;&nbsp;-H "Authorization: Bearer stub_sk_YOUR_KEY" \<br />
               &nbsp;&nbsp;-F "file=@example.jpg"
             </code>
+          ) : (
+            <pre className="m-0 font-mono text-[11px] leading-relaxed text-[var(--ink)]">
+{`// Claude Desktop / Cursor / Antigravity (MCP Server 配置)
+{
+  "mcpServers": {
+    "short-links": {
+      "url": "${publicBase}/api/mcp",
+      "headers": {
+        "Authorization": "Bearer stub_sk_YOUR_KEY"
+      }
+    }
+  }
+}`}
+            </pre>
           )}
         </div>
       </div>
