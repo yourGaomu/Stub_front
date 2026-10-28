@@ -92,3 +92,69 @@ export async function request<T = void>(
 
   return data as T;
 }
+
+export function uploadBinaryPart<T = unknown>(
+  path: string,
+  body: Blob,
+  onProgress: (loaded: number, total: number) => void,
+  signal?: AbortSignal,
+): Promise<T> {
+  // 1. 分片使用 XHR，仅为浏览器提供上传进度；请求仍然先到 Go 后端。
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const token = getStoredToken();
+    xhr.open("PUT", `${API_BASE}${path}`);
+    xhr.setRequestHeader("X-Client-App", "shortlink_web");
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    const abort = () => xhr.abort();
+    signal?.addEventListener("abort", abort, { once: true });
+    xhr.upload.onprogress = (event) => onProgress(event.loaded, event.total || body.size);
+    xhr.onerror = () => reject(new ApiError(0, "network_error", "分片上传网络错误"));
+    xhr.onabort = () => reject(new DOMException("上传已取消", "AbortError"));
+    xhr.onload = () => {
+      signal?.removeEventListener("abort", abort);
+      let data: unknown = null;
+      try {
+        data = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+      } catch {
+        data = null;
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        const payload = data as APIErrorPayload | null;
+        reject(new ApiError(xhr.status, payload?.error?.code || `http_${xhr.status}`, payload?.error?.message || "分片上传失败", payload?.error?.requestId));
+        return;
+      }
+      resolve(data as T);
+    };
+    xhr.send(body);
+  });
+}
+
+export function uploadFormData<T = unknown>(path: string, body: FormData, onProgress: (loaded: number, total: number) => void, signal?: AbortSignal): Promise<T> {
+	// 1. 普通上传保持 multipart/form-data 协议，同时报告浏览器上传进度。
+	return new Promise((resolve, reject) => {
+		const xhr = new XMLHttpRequest();
+		const token = getStoredToken();
+		xhr.open("POST", `${API_BASE}${path}`);
+		xhr.setRequestHeader("X-Client-App", "shortlink_web");
+		if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+		const abort = () => xhr.abort();
+		signal?.addEventListener("abort", abort, { once: true });
+		xhr.upload.onprogress = (event) => onProgress(event.loaded, event.total || 0);
+		xhr.onerror = () => reject(new ApiError(0, "network_error", "上传网络错误"));
+		xhr.onabort = () => reject(new DOMException("上传已取消", "AbortError"));
+		xhr.onload = () => {
+			signal?.removeEventListener("abort", abort);
+			let data: unknown = null;
+			try { data = xhr.responseText ? JSON.parse(xhr.responseText) : null; } catch { data = null; }
+			if (xhr.status < 200 || xhr.status >= 300) {
+				const payload = data as APIErrorPayload | null;
+				reject(new ApiError(xhr.status, payload?.error?.code || `http_${xhr.status}`, payload?.error?.message || "上传失败", payload?.error?.requestId));
+				return;
+			}
+			resolve(data as T);
+		};
+		xhr.send(body);
+	});
+}

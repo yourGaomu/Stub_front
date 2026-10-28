@@ -1,10 +1,11 @@
-import { request } from "./client";
+import { request, uploadBinaryPart, uploadFormData } from "./client";
 import type {
   APIKeyDTO,
   AccessEvent,
   AdminUserItem,
   AnalyticsResponse,
   AssetDTO,
+	UploadSessionDTO,
   AuditEvent,
   BusinessDTO,
   BusinessItem,
@@ -240,6 +241,28 @@ export const assetsApi = {
     fd.append("file", input.file);
     return request<AssetDTO>("/assets", { method: "POST", body: fd });
   },
+
+  uploadWithProgress: (input: { businessId: string; path: string; file: File }, onProgress: (loaded: number, total: number) => void, signal?: AbortSignal) => {
+		const fd = new FormData();
+		fd.append("businessId", input.businessId);
+		fd.append("path", input.path);
+		fd.append("file", input.file);
+		return uploadFormData<AssetDTO>("/assets", fd, onProgress, signal);
+	},
+
+  beginUpload: (body: { businessId: string; path: string; fileName: string; contentType: string; sizeBytes: number; idempotencyKey?: string }) =>
+    request<UploadSessionDTO>("/assets/uploads", { method: "POST", body: JSON.stringify(body) }),
+
+  activeUploads: () => request<{ items: UploadSessionDTO[] }>("/assets/uploads"),
+
+  uploadPart: (sessionId: string, partNumber: number, chunk: Blob, onProgress: (loaded: number, total: number) => void, signal?: AbortSignal) =>
+    uploadBinaryPart<UploadSessionDTO>(`/assets/uploads/${encodeURIComponent(sessionId)}/parts/${partNumber}`, chunk, onProgress, signal),
+
+  uploadStatus: (sessionId: string) => request<UploadSessionDTO>(`/assets/uploads/${encodeURIComponent(sessionId)}`),
+
+  completeUpload: (sessionId: string) => request<UploadSessionDTO>(`/assets/uploads/${encodeURIComponent(sessionId)}/complete`, { method: "POST" }),
+
+  cancelUpload: (sessionId: string) => request<UploadSessionDTO>(`/assets/uploads/${encodeURIComponent(sessionId)}`, { method: "DELETE" }),
 
   list: (params: {
     businessId?: string;

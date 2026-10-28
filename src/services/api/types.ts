@@ -118,6 +118,7 @@ export interface UsageResponse {
     maxSingleFileBytes: number;
     quotaBytes: number;
     usedBytes: number;
+    reservedBytes: number;
     remainingBytes: number;
   };
   urlLinks: {
@@ -135,6 +136,20 @@ export interface UsageResponse {
     limit: number | null;
     remaining: number | null;
   };
+}
+
+export interface UploadSessionDTO {
+  uploadSessionId: string;
+  idempotencyKey?: string;
+  status: string;
+  fileName: string;
+  sizeBytes: number;
+  partSizeBytes: number;
+  partCount: number;
+  receivedParts: number[];
+  receivedBytes: number;
+  expiresAt: string;
+  asset?: AssetDTO;
 }
 
 export interface InviteDTO {
