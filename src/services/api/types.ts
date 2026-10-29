@@ -143,6 +143,8 @@ export interface UploadSessionDTO {
   idempotencyKey?: string;
   status: string;
   fileName: string;
+  businessId: string;
+  path: string;
   sizeBytes: number;
   partSizeBytes: number;
   partCount: number;

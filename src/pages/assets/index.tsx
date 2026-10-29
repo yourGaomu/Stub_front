@@ -1,6 +1,6 @@
 import { App, Modal, Pagination } from "antd";
-import { Link2, RefreshCw, RotateCcw, Trash2, Upload } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Check, Link2, RefreshCw, RotateCcw, Trash2, Upload } from "lucide-react";
+import { type DragEvent, useCallback, useEffect, useRef, useState } from "react";
 import { CreateLinkDrawer } from "@/components/create-link-drawer";
 import { formatDateTime, formatMB } from "@/lib/format";
 import { assetsApi } from "@/services/api";
@@ -29,7 +29,8 @@ async function buildUploadIdempotencyKey(file: File, businessId: string, path: s
 
 type UploadTask = {
   fileName: string;
-  status: "uploading" | "paused" | "completed" | "cancelled" | "failed";
+  mode: "single" | "multipart";
+  status: "uploading" | "retrying" | "paused" | "completed" | "cancelled" | "failed";
   loaded: number;
   total: number;
   speed: number;
@@ -45,6 +46,17 @@ function formatRemaining(seconds: number | null) {
   if (seconds === null || !Number.isFinite(seconds)) return "计算中";
   if (seconds < 60) return `${Math.max(1, Math.ceil(seconds))} 秒`;
   return `${Math.ceil(seconds / 60)} 分钟`;
+}
+
+function uploadTaskStatusLabel(status: UploadTask["status"]) {
+  switch (status) {
+    case "uploading": return "上传中";
+    case "retrying": return "网络异常，自动重试中";
+    case "paused": return "已暂停，可继续";
+    case "completed": return "已完成";
+    case "cancelled": return "已取消";
+    case "failed": return "失败，可续传";
+  }
 }
 
 export default function AssetsPage() {
@@ -70,9 +82,17 @@ export default function AssetsPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadTask, setUploadTask] = useState<UploadTask | null>(null);
   const [activeUploads, setActiveUploads] = useState<UploadSessionDTO[]>([]);
+  const [completingSessionId, setCompletingSessionId] = useState<string | null>(null);
+  const [resumeSessionId, setResumeSessionId] = useState<string | null>(null);
+  const [fileDragOver, setFileDragOver] = useState(false);
   const uploadAbortRef = useRef<AbortController | null>(null);
   const uploadSessionRef = useRef<string | null>(null);
   const uploadPausedRef = useRef(false);
+
+  const refreshActiveUploads = useCallback(async () => {
+    const result = await assetsApi.activeUploads();
+    setActiveUploads(result.items);
+  }, []);
 
   // 从素材直接建短链
   const [linkAssetId, setLinkAssetId] = useState<string | null>(null);
@@ -84,8 +104,8 @@ export default function AssetsPage() {
   }, [businesses, uploadBiz]);
 
   useEffect(() => {
-    assetsApi.activeUploads().then((result) => setActiveUploads(result.items)).catch(() => undefined);
-  }, []);
+    refreshActiveUploads().catch(() => undefined);
+  }, [refreshActiveUploads]);
 
   const fetchList = useCallback(async () => {
     setLoading(true);
@@ -157,7 +177,8 @@ export default function AssetsPage() {
     uploadPausedRef.current = false;
     const abortController = new AbortController();
     uploadAbortRef.current = abortController;
-    setUploadTask({ fileName: uploadFile.name, status: "uploading", loaded: 0, total: uploadFile.size, speed: 0, eta: null });
+    const isMultipart = uploadFile.size > NORMAL_UPLOAD_LIMIT;
+    setUploadTask({ fileName: uploadFile.name, mode: isMultipart ? "multipart" : "single", status: "uploading", loaded: 0, total: uploadFile.size, speed: 0, eta: null });
     try {
       if (uploadFile.size <= NORMAL_UPLOAD_LIMIT) {
         await assetsApi.uploadWithProgress(
@@ -165,14 +186,19 @@ export default function AssetsPage() {
           (loaded, total) => {
             const elapsed = Math.max(1, Date.now() - startedAt) / 1000;
             const speed = loaded / elapsed;
-            setUploadTask({ fileName: uploadFile.name, status: "uploading", loaded, total, speed, eta: speed ? (total - loaded) / speed : null });
+            setUploadTask({ fileName: uploadFile.name, mode: "single", status: "uploading", loaded, total, speed, eta: speed ? (total - loaded) / speed : null });
           },
           abortController.signal,
         );
       } else {
         const idempotencyKey = await buildUploadIdempotencyKey(uploadFile, uploadBiz.trim(), uploadPath.trim());
         if (abortController.signal.aborted) throw new DOMException("上传已取消", "AbortError");
-        let resumed = activeUploads.find((item) => item.idempotencyKey === idempotencyKey);
+        let resumed = resumeSessionId
+          ? await assetsApi.uploadStatus(resumeSessionId)
+          : activeUploads.find((item) => item.idempotencyKey === idempotencyKey);
+        if (resumed && resumed.idempotencyKey !== idempotencyKey) {
+          throw new Error("所选文件、业务或目录与待恢复任务不一致，请核对后再试");
+        }
         if (uploadSessionRef.current) {
           const current = await assetsApi.uploadStatus(uploadSessionRef.current);
           if (current.idempotencyKey === idempotencyKey) {
@@ -192,12 +218,14 @@ export default function AssetsPage() {
           idempotencyKey,
         });
         uploadSessionRef.current = session.uploadSessionId;
+        await refreshActiveUploads().catch(() => undefined);
         if (abortController.signal.aborted) {
           await assetsApi.cancelUpload(session.uploadSessionId);
           uploadSessionRef.current = null;
           throw new DOMException("上传已取消", "AbortError");
         }
         const partProgress = new Map<number, number>();
+        const completedParts = new Set(session.receivedParts);
         session.receivedParts.forEach((part) => {
           const partSize = part === session.partCount ? uploadFile.size - session.partSizeBytes * (session.partCount - 1) : session.partSizeBytes;
           partProgress.set(part, partSize);
@@ -208,7 +236,10 @@ export default function AssetsPage() {
           const loaded = Array.from(partProgress.values()).reduce((sum, value) => sum + value, 0);
           const elapsed = Math.max(1, Date.now() - startedAt) / 1000;
           const speed = loaded / elapsed;
-          setUploadTask({ fileName: uploadFile.name, status: "uploading", loaded, total: uploadFile.size, speed, eta: speed ? (uploadFile.size - loaded) / speed : null });
+          setActiveUploads((current) => current.map((item) => item.uploadSessionId === session.uploadSessionId
+            ? { ...item, receivedBytes: loaded, receivedParts: Array.from(completedParts) }
+            : item));
+          setUploadTask({ fileName: uploadFile.name, mode: "multipart", status: "uploading", loaded, total: uploadFile.size, speed, eta: speed ? (uploadFile.size - loaded) / speed : null });
         };
         const worker = async () => {
           while (cursor < pendingParts.length) {
@@ -223,12 +254,17 @@ export default function AssetsPage() {
                   refreshProgress();
                 }, abortController.signal);
                 partProgress.set(partNumber, end - start);
+                completedParts.add(partNumber);
                 refreshProgress();
                 lastError = undefined;
                 break;
               } catch (error) {
                 lastError = error;
                 if (error instanceof DOMException && error.name === "AbortError") throw error;
+                if (attempt < 2) {
+                  setUploadTask((current) => current ? { ...current, status: "retrying" } : current);
+                  await new Promise((resolve) => window.setTimeout(resolve, 1000 * (attempt + 1)));
+                }
               }
             }
             if (lastError) throw lastError;
@@ -237,6 +273,7 @@ export default function AssetsPage() {
         await Promise.all([worker(), worker(), worker()]);
         await assetsApi.completeUpload(session.uploadSessionId);
         uploadSessionRef.current = null;
+        setResumeSessionId(null);
         setActiveUploads((current) => current.filter((item) => item.uploadSessionId !== session.uploadSessionId));
       }
       message.success("素材上传成功");
@@ -253,6 +290,9 @@ export default function AssetsPage() {
         setUploadTask((current) => (current ? { ...current, status: "paused" } : current));
       } else if (!(err instanceof DOMException && err.name === "AbortError")) {
         setUploadTask((current) => (current ? { ...current, status: "failed" } : current));
+      }
+      if (uploadSessionRef.current) {
+        await refreshActiveUploads().catch(() => undefined);
       }
       message.error(err instanceof Error ? err.message : "上传素材失败");
     } finally {
@@ -291,8 +331,56 @@ export default function AssetsPage() {
     }
   };
 
+  const handleFileDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setFileDragOver(false);
+    if (uploading) return;
+    const file = event.dataTransfer.files[0];
+    if (!file) return;
+    setUploadFile(file);
+    if (uploadPath === "docs/manual.pdf") setUploadPath(`uploads/${file.name}`);
+    setResumeSessionId(null);
+    setUploadOpen(true);
+    if (event.dataTransfer.files.length > 1) message.info("一次上传一个文件，已选择第一个文件");
+  };
+
+  const handleCompleteRecoveredUpload = async (session: UploadSessionDTO) => {
+    setCompletingSessionId(session.uploadSessionId);
+    try {
+      await assetsApi.completeUpload(session.uploadSessionId);
+      setActiveUploads((current) => current.filter((item) => item.uploadSessionId !== session.uploadSessionId));
+      message.success(`${session.fileName} 已完成并保存到素材库`);
+      await refreshUsage();
+      fetchList();
+    } catch (error) {
+      message.error(error instanceof ApiError ? `${error.message}${error.requestId ? `（请求 ID：${error.requestId}）` : ""}` : "完成上传失败");
+    } finally {
+      setCompletingSessionId(null);
+    }
+  };
+
   return (
-    <div className="flex flex-col gap-5">
+    <div
+      className="relative flex flex-col gap-5"
+      onDragEnter={(event) => {
+        if (!uploading && Array.from(event.dataTransfer.types).includes("Files")) setFileDragOver(true);
+      }}
+      onDragOver={(event) => {
+        if (Array.from(event.dataTransfer.types).includes("Files")) event.preventDefault();
+      }}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFileDragOver(false);
+      }}
+      onDrop={handleFileDrop}
+    >
+      {fileDragOver && (
+        <div className="pointer-events-none absolute inset-0 z-20 grid place-items-center border-2 border-dashed border-[var(--ink)] bg-[var(--paper)]/90">
+          <div className="flex items-center gap-3 text-sm font-semibold text-[var(--ink)]">
+            <Upload size={20} />
+            松开鼠标添加文件
+          </div>
+        </div>
+      )}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="font-cn-display text-[28px] font-black tracking-tight">MinIO 托管素材</h1>
@@ -301,7 +389,7 @@ export default function AssetsPage() {
           </p>
         </div>
         {hasPermission("assets.upload") && (
-          <button type="button" onClick={() => setUploadOpen(true)} className="stub-btn signal">
+          <button type="button" onClick={() => { setResumeSessionId(null); setUploadOpen(true); }} className="stub-btn signal">
             <Upload size={15} />
             上传素材
           </button>
@@ -311,23 +399,69 @@ export default function AssetsPage() {
       {activeUploads.length > 0 && (
         <div className="border-y border-[var(--line)] py-3">
           <div className="mb-2 flex items-center justify-between text-xs font-semibold text-[var(--ink-2)]">
-            <span>待恢复上传</span>
+            <span>上传任务</span>
             <span>{activeUploads.length} 个</span>
           </div>
           <div className="flex flex-col divide-y divide-[var(--line)]">
             {activeUploads.map((session) => (
-              <div key={session.uploadSessionId} className="flex flex-wrap items-center justify-between gap-3 py-2 text-xs">
-                <div className="min-w-0">
-                  <div className="truncate font-medium text-[var(--ink)]">{session.fileName}</div>
-                  <div className="mt-0.5 text-[var(--ink-3)]">
-                    {formatMB(session.receivedBytes)} / {formatMB(session.sizeBytes)} · {session.receivedParts.length}/{session.partCount} 分片
+              <div key={session.uploadSessionId} className="flex flex-wrap items-center gap-x-4 gap-y-2 py-3 text-xs">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="truncate font-medium text-[var(--ink)]">{session.fileName}</span>
+                    {uploadSessionRef.current === session.uploadSessionId && uploading ? (
+                      <span className="stub-badge ok">{uploadTask?.status === "retrying" ? "自动重试中" : "上传中"}</span>
+                    ) : session.receivedParts.length === session.partCount && session.receivedBytes >= session.sizeBytes ? (
+                      <span className="stub-badge warn">分片已齐 · 待完成</span>
+                    ) : (
+                      <span className="stub-badge neutral">待续传</span>
+                    )}
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 text-[var(--ink-3)]">
+                    <span>{formatMB(session.receivedBytes)} / {formatMB(session.sizeBytes)}</span>
+                    <span>{session.receivedParts.length} / {session.partCount} 分片</span>
+                    <span>{session.businessId} · {session.path}</span>
+                    <span>有效期至 {formatDateTime(session.expiresAt)}</span>
+                  </div>
+                  <div className="mt-2 h-1 overflow-hidden rounded bg-[var(--line)]">
+                    <div
+                      className="h-full bg-[var(--ink)]"
+                      style={{ width: `${Math.min(100, (session.receivedBytes / Math.max(1, session.sizeBytes)) * 100)}%` }}
+                    />
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[var(--ink-3)]">重新选择同一文件后继续</span>
+                <div className="flex items-center gap-3">
+                  {uploadSessionRef.current === session.uploadSessionId && uploading ? (
+                    <span className="text-[var(--ink-3)]">任务进行中</span>
+                  ) : session.receivedParts.length === session.partCount && session.receivedBytes >= session.sizeBytes ? (
+                    <button
+                      type="button"
+                      className="stub-btn signal !h-8 !px-2.5 !text-xs"
+                      disabled={completingSessionId !== null}
+                      onClick={() => handleCompleteRecoveredUpload(session)}
+                    >
+                      <Check size={13} />
+                      {completingSessionId === session.uploadSessionId ? "正在完成" : "完成登记"}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="stub-btn ghost !h-8 !px-2.5 !text-xs"
+                      onClick={() => {
+                        setResumeSessionId(session.uploadSessionId);
+                        setUploadBiz(session.businessId);
+                        setUploadPath(session.path);
+                        setUploadFile(null);
+                        setUploadOpen(true);
+                      }}
+                    >
+                      <Upload size={13} />
+                      选择文件续传
+                    </button>
+                  )}
                   <button
                     type="button"
-                    className="cursor-pointer text-[var(--ink-2)] hover:text-red-600"
+                    className="cursor-pointer text-[var(--ink-2)] hover:text-red-600 disabled:opacity-50"
+                    disabled={completingSessionId !== null}
                     onClick={async () => {
                       try {
                         await assetsApi.cancelUpload(session.uploadSessionId);
@@ -524,9 +658,9 @@ export default function AssetsPage() {
 
       {/* 上传素材弹窗 */}
       <Modal
-        title="上传托管素材 (multipart/form-data)"
+        title={resumeSessionId ? "继续分片上传" : "上传托管素材"}
         open={uploadOpen}
-        onCancel={uploading ? handleCancelUpload : () => setUploadOpen(false)}
+        onCancel={uploading ? handleCancelUpload : () => { setResumeSessionId(null); setUploadOpen(false); }}
         onOk={handleUpload}
         confirmLoading={uploading}
         okText={uploadTask?.status === "paused" ? "继续上传" : "开始上传"}
@@ -537,13 +671,13 @@ export default function AssetsPage() {
             <div className="rounded border border-[var(--line-2)] bg-[var(--paper-2)] p-3 text-xs text-[var(--ink-2)]">
               <div className="flex items-center justify-between gap-3">
                 <span className="truncate font-medium">{uploadTask.fileName}</span>
-                <span>{Math.round((uploadTask.loaded / Math.max(1, uploadTask.total)) * 100)}%</span>
+                <span className="shrink-0">{uploadTask.mode === "multipart" ? "分片续传" : "单文件上传"} · {uploadTaskStatusLabel(uploadTask.status)}</span>
               </div>
               <div className="mt-2 h-1.5 overflow-hidden rounded bg-[var(--line)]">
                 <div className="h-full bg-[var(--ink)] transition-[width]" style={{ width: `${Math.min(100, (uploadTask.loaded / Math.max(1, uploadTask.total)) * 100)}%` }} />
               </div>
               <div className="mt-2 flex justify-between text-[11px] text-[var(--ink-3)]">
-                <span>{formatMB(uploadTask.loaded)} / {formatMB(uploadTask.total)}</span>
+                <span>{formatMB(uploadTask.loaded)} / {formatMB(uploadTask.total)} · {Math.round((uploadTask.loaded / Math.max(1, uploadTask.total)) * 100)}%</span>
                 <span>{formatUploadSpeed(uploadTask.speed)} · 剩余 {formatRemaining(uploadTask.eta)}</span>
               </div>
               {uploading && uploadFile && uploadFile.size > NORMAL_UPLOAD_LIMIT && (
@@ -553,6 +687,9 @@ export default function AssetsPage() {
               )}
             </div>
           )}
+          <div className="text-xs leading-5 text-[var(--ink-3)]">
+            分片上传失败会自动重试；刷新页面后可从下方任务恢复，选择原文件后只补传缺失分片。网页关闭期间浏览器无法继续读取本地文件。
+          </div>
           <div className="rounded border-l-[3px] border-[var(--ink)] bg-[var(--paper-2)] p-3 text-xs text-[var(--ink-2)]">
             单文件上限 <b>{formatMB(usage?.storage.maxSingleFileBytes, 0)}</b> · 当前剩余存储{" "}
             <b>{formatMB(usage?.storage.remainingBytes)}</b>（十进制 MB：1 MB = 1,000,000 字节）。
@@ -598,7 +735,7 @@ export default function AssetsPage() {
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-[var(--ink-2)]">选择文件 (file)</label>
+            <label className="text-xs font-medium text-[var(--ink-2)]">选择或拖入一个文件</label>
             <input
               type="file"
               onChange={(e) => {
@@ -607,9 +744,13 @@ export default function AssetsPage() {
                 if (f && uploadPath === "docs/manual.pdf") {
                   setUploadPath(`uploads/${f.name}`);
                 }
+                e.target.value = "";
               }}
               className="rounded border border-dashed border-[var(--line)] bg-[var(--paper-3)] p-3 text-xs"
             />
+            {resumeSessionId && (
+              <span className="text-xs text-[var(--ink-3)]">请选择原文件，并保持原来的业务和目录，页面会校验后只补传缺少的分片。</span>
+            )}
             {uploadFile && (
               <div className="font-mono text-xs text-[var(--ink-2)]">
                 已选：{uploadFile.name} · {formatMB(uploadFile.size)} ({uploadFile.size.toLocaleString()} B)
