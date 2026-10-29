@@ -59,6 +59,31 @@ function uploadTaskStatusLabel(status: UploadTask["status"]) {
   }
 }
 
+function formatUploadError(error: unknown, fallback: string) {
+  if (!(error instanceof ApiError)) return error instanceof Error ? error.message : fallback;
+  return `${error.message}${error.code ? `（${error.code}）` : ""}${error.requestId ? `，请求 ID：${error.requestId}` : ""}`;
+}
+
+function waitForUploadRetry(delayMs: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException("上传已取消", "AbortError"));
+      return;
+    }
+    const finish = () => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    };
+    const abort = () => {
+      window.clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      reject(new DOMException("上传已取消", "AbortError"));
+    };
+    const timer = window.setTimeout(finish, delayMs);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
 export default function AssetsPage() {
   const { message, modal } = App.useApp();
   const { businesses, usage, isAdmin, hasPermission, refreshUsage } = useAuthStore();
@@ -88,6 +113,8 @@ export default function AssetsPage() {
   const uploadAbortRef = useRef<AbortController | null>(null);
   const uploadSessionRef = useRef<string | null>(null);
   const uploadPausedRef = useRef(false);
+  const uploadCycleRef = useRef<{ done: Promise<void>; finish: () => void } | null>(null);
+  const cancelInProgressRef = useRef(false);
 
   const refreshActiveUploads = useCallback(async () => {
     const result = await assetsApi.activeUploads();
@@ -131,20 +158,66 @@ export default function AssetsPage() {
     fetchList();
   }, [fetchList]);
 
-  const handleCancelUpload = async () => {
-    uploadPausedRef.current = false;
-    uploadAbortRef.current?.abort();
-    const sessionId = uploadSessionRef.current;
-    if (sessionId) {
-      try {
-        await assetsApi.cancelUpload(sessionId);
-      } catch {
-        // 1. 网络中断时保留后端会话，后台任务会按过期时间回收预留额度。
-      }
+  const handleCancelFailure = async (sessionId: string, error: unknown): Promise<"completed" | "cancelled" | null> => {
+    let session: UploadSessionDTO | null = null;
+    try {
+      session = await assetsApi.uploadStatus(sessionId);
+    } catch {
+      // 保留取消接口的原始错误，活动任务刷新会显示后端实际状态。
     }
-    uploadSessionRef.current = null;
-    setUploading(false);
-    setUploadTask((current) => (current ? { ...current, status: "cancelled" } : current));
+    if (session?.status === "completed" || session?.status === "cancelled") {
+      const isCurrent = uploadSessionRef.current === sessionId;
+      if (isCurrent) uploadSessionRef.current = null;
+      setActiveUploads((current) => current.filter((item) => item.uploadSessionId !== sessionId));
+      if (isCurrent) {
+        setUploadTask((current) => current ? {
+          ...current,
+          status: session.status === "completed" ? "completed" : "cancelled",
+          ...(session.status === "completed" ? { loaded: current.total, eta: 0 } : {}),
+        } : current);
+      }
+      message.info(session.status === "completed" ? "取消前上传已完成，素材已保存" : "上传会话已取消");
+      await refreshUsage().catch(() => undefined);
+      if (session.status === "completed") fetchList();
+      return session.status;
+    }
+    message.error(formatUploadError(error, "取消上传失败"));
+    await refreshActiveUploads().catch(() => undefined);
+    return null;
+  };
+
+  const handleCancelUpload = async () => {
+    if (cancelInProgressRef.current) return;
+    cancelInProgressRef.current = true;
+    const startingSessionId = uploadSessionRef.current;
+    try {
+      uploadPausedRef.current = false;
+      uploadAbortRef.current?.abort();
+      await uploadCycleRef.current?.done;
+      const sessionId = startingSessionId || uploadSessionRef.current;
+      let cancelled = !sessionId;
+      let terminalStatus: "completed" | "cancelled" | null = null;
+      if (sessionId) {
+        try {
+          await assetsApi.cancelUpload(sessionId);
+          cancelled = true;
+          setActiveUploads((current) => current.filter((item) => item.uploadSessionId !== sessionId));
+          await refreshUsage().catch(() => undefined);
+        } catch (error) {
+          terminalStatus = await handleCancelFailure(sessionId, error);
+        }
+      }
+      if (cancelled || terminalStatus) uploadSessionRef.current = null;
+      setUploading(false);
+      setUploadTask((current) => (current ? {
+        ...current,
+        status: terminalStatus === "completed" ? "completed" : cancelled || terminalStatus === "cancelled" ? "cancelled" : "failed",
+        ...(terminalStatus === "completed" ? { loaded: current.total, eta: 0 } : {}),
+      } : current));
+      setUploadOpen(false);
+    } finally {
+      cancelInProgressRef.current = false;
+    }
   };
 
   const handlePauseUpload = () => {
@@ -172,6 +245,9 @@ export default function AssetsPage() {
       return;
     }
 
+    let finishUploadCycle!: () => void;
+    const uploadCycle = { done: new Promise<void>((resolve) => { finishUploadCycle = resolve; }), finish: () => finishUploadCycle() };
+    uploadCycleRef.current = uploadCycle;
     setUploading(true);
     const startedAt = Date.now();
     uploadPausedRef.current = false;
@@ -263,14 +339,28 @@ export default function AssetsPage() {
                 if (error instanceof DOMException && error.name === "AbortError") throw error;
                 if (attempt < 2) {
                   setUploadTask((current) => current ? { ...current, status: "retrying" } : current);
-                  await new Promise((resolve) => window.setTimeout(resolve, 1000 * (attempt + 1)));
+                  await waitForUploadRetry(1000 * (attempt + 1), abortController.signal);
                 }
               }
             }
             if (lastError) throw lastError;
           }
         };
-        await Promise.all([worker(), worker(), worker()]);
+        let workerError: unknown;
+        const runWorker = async () => {
+          try {
+            await worker();
+          } catch (error) {
+            if (!abortController.signal.aborted) {
+              workerError = error;
+              abortController.abort();
+            }
+            throw error;
+          }
+        };
+        await Promise.allSettled([runWorker(), runWorker(), runWorker()]);
+        if (workerError) throw workerError;
+        if (abortController.signal.aborted) throw new DOMException("上传已暂停或取消", "AbortError");
         await assetsApi.completeUpload(session.uploadSessionId);
         uploadSessionRef.current = null;
         setResumeSessionId(null);
@@ -283,21 +373,24 @@ export default function AssetsPage() {
       await refreshUsage();
       fetchList();
     } catch (err) {
-      if (!(err instanceof DOMException && err.name === "AbortError")) {
+      const aborted = err instanceof DOMException && err.name === "AbortError";
+      if (!aborted) {
         abortController.abort();
       }
-      if (err instanceof DOMException && err.name === "AbortError" && uploadPausedRef.current) {
+      if (aborted && uploadPausedRef.current) {
         setUploadTask((current) => (current ? { ...current, status: "paused" } : current));
-      } else if (!(err instanceof DOMException && err.name === "AbortError")) {
+      } else if (!aborted) {
         setUploadTask((current) => (current ? { ...current, status: "failed" } : current));
       }
       if (uploadSessionRef.current) {
         await refreshActiveUploads().catch(() => undefined);
       }
-      message.error(err instanceof Error ? err.message : "上传素材失败");
+      if (!aborted) message.error(formatUploadError(err, "上传素材失败"));
     } finally {
       setUploading(false);
       uploadAbortRef.current = null;
+      uploadCycle.finish();
+      if (uploadCycleRef.current === uploadCycle) uploadCycleRef.current = null;
     }
   };
 
@@ -353,9 +446,27 @@ export default function AssetsPage() {
       await refreshUsage();
       fetchList();
     } catch (error) {
-      message.error(error instanceof ApiError ? `${error.message}${error.requestId ? `（请求 ID：${error.requestId}）` : ""}` : "完成上传失败");
+      message.error(formatUploadError(error, "完成上传失败"));
     } finally {
       setCompletingSessionId(null);
+    }
+  };
+
+  const handleCancelUploadSession = async (session: UploadSessionDTO) => {
+    const isCurrentUpload = uploadSessionRef.current === session.uploadSessionId;
+    if (isCurrentUpload) {
+      uploadPausedRef.current = false;
+      uploadAbortRef.current?.abort();
+      await uploadCycleRef.current?.done;
+    }
+    try {
+      await assetsApi.cancelUpload(session.uploadSessionId);
+      setActiveUploads((current) => current.filter((item) => item.uploadSessionId !== session.uploadSessionId));
+      message.success("上传会话已取消并释放预留额度");
+      if (uploadSessionRef.current === session.uploadSessionId) uploadSessionRef.current = null;
+      await refreshUsage().catch(() => undefined);
+    } catch (error) {
+      await handleCancelFailure(session.uploadSessionId, error);
     }
   };
 
@@ -408,7 +519,9 @@ export default function AssetsPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="truncate font-medium text-[var(--ink)]">{session.fileName}</span>
-                    {uploadSessionRef.current === session.uploadSessionId && uploading ? (
+                    {session.status === "cleanup_pending" ? (
+                      <span className="stub-badge warn">取消清理中</span>
+                    ) : uploadSessionRef.current === session.uploadSessionId && uploading ? (
                       <span className="stub-badge ok">{uploadTask?.status === "retrying" ? "自动重试中" : "上传中"}</span>
                     ) : session.receivedParts.length === session.partCount && session.receivedBytes >= session.sizeBytes ? (
                       <span className="stub-badge warn">分片已齐 · 待完成</span>
@@ -417,20 +530,37 @@ export default function AssetsPage() {
                     )}
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-x-3 text-[var(--ink-3)]">
-                    <span>{formatMB(session.receivedBytes)} / {formatMB(session.sizeBytes)}</span>
-                    <span>{session.receivedParts.length} / {session.partCount} 分片</span>
+                    {session.status === "cleanup_pending" ? (
+                      <span>MinIO 清理完成后会自动释放预留额度</span>
+                    ) : (
+                      <>
+                        <span>{formatMB(session.receivedBytes)} / {formatMB(session.sizeBytes)}</span>
+                        <span>{session.receivedParts.length} / {session.partCount} 分片</span>
+                      </>
+                    )}
                     <span>{session.businessId} · {session.path}</span>
                     <span>有效期至 {formatDateTime(session.expiresAt)}</span>
                   </div>
-                  <div className="mt-2 h-1 overflow-hidden rounded bg-[var(--line)]">
-                    <div
-                      className="h-full bg-[var(--ink)]"
-                      style={{ width: `${Math.min(100, (session.receivedBytes / Math.max(1, session.sizeBytes)) * 100)}%` }}
-                    />
-                  </div>
+                  {session.status !== "cleanup_pending" && (
+                    <div className="mt-2 h-1 overflow-hidden rounded bg-[var(--line)]">
+                      <div
+                        className="h-full bg-[var(--ink)]"
+                        style={{ width: `${Math.min(100, (session.receivedBytes / Math.max(1, session.sizeBytes)) * 100)}%` }}
+                      />
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-3">
-                  {uploadSessionRef.current === session.uploadSessionId && uploading ? (
+                  {session.status === "cleanup_pending" ? (
+                    <button
+                      type="button"
+                      className="stub-btn ghost !h-8 !px-2.5 !text-xs"
+                      disabled={completingSessionId !== null}
+                      onClick={() => handleCancelUploadSession(session)}
+                    >
+                      重试清理
+                    </button>
+                  ) : uploadSessionRef.current === session.uploadSessionId && uploading ? (
                     <span className="text-[var(--ink-3)]">任务进行中</span>
                   ) : session.receivedParts.length === session.partCount && session.receivedBytes >= session.sizeBytes ? (
                     <button
@@ -458,24 +588,17 @@ export default function AssetsPage() {
                       选择文件续传
                     </button>
                   )}
-                  <button
-                    type="button"
-                    className="cursor-pointer text-[var(--ink-2)] hover:text-red-600 disabled:opacity-50"
-                    disabled={completingSessionId !== null}
-                    onClick={async () => {
-                      try {
-                        await assetsApi.cancelUpload(session.uploadSessionId);
-                        setActiveUploads((current) => current.filter((item) => item.uploadSessionId !== session.uploadSessionId));
-                        message.success("上传会话已取消并释放预留额度");
-                        refreshUsage();
-                      } catch (error) {
-                        message.error(error instanceof ApiError ? error.message : "取消上传失败");
-                      }
-                    }}
-                    aria-label={`取消 ${session.fileName} 上传`}
-                  >
-                    取消
-                  </button>
+                  {session.status !== "cleanup_pending" && (
+                    <button
+                      type="button"
+                      className="cursor-pointer text-[var(--ink-2)] hover:text-red-600 disabled:opacity-50"
+                      disabled={completingSessionId !== null}
+                      onClick={() => handleCancelUploadSession(session)}
+                      aria-label={`取消 ${session.fileName} 上传`}
+                    >
+                      取消
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

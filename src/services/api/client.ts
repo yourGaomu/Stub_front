@@ -108,12 +108,23 @@ export function uploadBinaryPart<T = unknown>(
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
     if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
     const abort = () => xhr.abort();
+    const cleanup = () => signal?.removeEventListener("abort", abort);
+    if (signal?.aborted) {
+      reject(new DOMException("上传已取消", "AbortError"));
+      return;
+    }
     signal?.addEventListener("abort", abort, { once: true });
     xhr.upload.onprogress = (event) => onProgress(event.loaded, event.total || body.size);
-    xhr.onerror = () => reject(new ApiError(0, "network_error", "分片上传网络错误"));
-    xhr.onabort = () => reject(new DOMException("上传已取消", "AbortError"));
+    xhr.onerror = () => {
+      cleanup();
+      reject(new ApiError(0, "network_error", "分片上传网络错误"));
+    };
+    xhr.onabort = () => {
+      cleanup();
+      reject(new DOMException("上传已取消", "AbortError"));
+    };
     xhr.onload = () => {
-      signal?.removeEventListener("abort", abort);
+      cleanup();
       let data: unknown = null;
       try {
         data = xhr.responseText ? JSON.parse(xhr.responseText) : null;
@@ -127,7 +138,12 @@ export function uploadBinaryPart<T = unknown>(
       }
       resolve(data as T);
     };
-    xhr.send(body);
+    try {
+      xhr.send(body);
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
   });
 }
 
@@ -140,12 +156,23 @@ export function uploadFormData<T = unknown>(path: string, body: FormData, onProg
 		xhr.setRequestHeader("X-Client-App", "shortlink_web");
 		if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
 		const abort = () => xhr.abort();
+		const cleanup = () => signal?.removeEventListener("abort", abort);
+		if (signal?.aborted) {
+			reject(new DOMException("上传已取消", "AbortError"));
+			return;
+		}
 		signal?.addEventListener("abort", abort, { once: true });
 		xhr.upload.onprogress = (event) => onProgress(event.loaded, event.total || 0);
-		xhr.onerror = () => reject(new ApiError(0, "network_error", "上传网络错误"));
-		xhr.onabort = () => reject(new DOMException("上传已取消", "AbortError"));
+		xhr.onerror = () => {
+			cleanup();
+			reject(new ApiError(0, "network_error", "上传网络错误"));
+		};
+		xhr.onabort = () => {
+			cleanup();
+			reject(new DOMException("上传已取消", "AbortError"));
+		};
 		xhr.onload = () => {
-			signal?.removeEventListener("abort", abort);
+			cleanup();
 			let data: unknown = null;
 			try { data = xhr.responseText ? JSON.parse(xhr.responseText) : null; } catch { data = null; }
 			if (xhr.status < 200 || xhr.status >= 300) {
@@ -155,6 +182,11 @@ export function uploadFormData<T = unknown>(path: string, body: FormData, onProg
 			}
 			resolve(data as T);
 		};
-		xhr.send(body);
+		try {
+			xhr.send(body);
+		} catch (error) {
+			cleanup();
+			reject(error);
+		}
 	});
 }
