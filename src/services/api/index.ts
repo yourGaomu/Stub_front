@@ -1,6 +1,12 @@
-import { request, uploadBinaryPart, uploadFormData } from "./client";
+import { downloadBlob, request, uploadBinaryPart, uploadFormData } from "./client";
 import type {
   APIKeyDTO,
+  AccessLogQuery,
+  AuditLogQuery,
+  CreateGroupRequest,
+  GroupDTO,
+  LinkListQuery,
+  UpdateGroupRequest,
   AccessEvent,
   AdminUserItem,
   AnalyticsResponse,
@@ -98,23 +104,25 @@ export const invitesApi = {
     ),
 };
 
+export const linkGroupsApi = {
+  list: (params: { workspaceId?: string; page?: number; pageSize?: number } = {}) =>
+    request<PageResponse<GroupDTO>>("/link-groups", { query: params }),
+  create: (body: CreateGroupRequest) =>
+    request<GroupDTO>("/link-groups", { method: "POST", body: JSON.stringify(body) }),
+  update: (groupId: string, body: UpdateGroupRequest) =>
+    request<GroupDTO>(`/link-groups/${encodeURIComponent(groupId)}`, { method: "PATCH", body: JSON.stringify(body) }),
+  remove: (groupId: string) =>
+    request<{ groupId: string; unlinkedCount: number; deleted: true }>(`/link-groups/${encodeURIComponent(groupId)}`, { method: "DELETE" }),
+};
+
 export const linksApi = {
   create: (body: CreateLinkRequest) =>
     request<LinkDTO>("/links", { method: "POST", body: JSON.stringify(body) }),
 
-  list: (params: {
-    page?: number;
-    pageSize?: number;
-    status?: string;
-    availability?: string;
-    workspaceId?: string;
-    targetType?: string;
-    code?: string;
-    keyword?: string;
-    assetId?: string;
-    createdFrom?: string;
-    createdTo?: string;
-  }) => request<PageResponse<LinkListItem>>("/links", { query: params }),
+  list: (params: LinkListQuery) => request<PageResponse<LinkListItem>>("/links", { query: { ...params } }),
+
+  exportCSV: ({ page: _page, pageSize: _pageSize, ...query }: LinkListQuery) =>
+    downloadBlob("/links/export.csv", { query }),
 
   get: (linkId: string) => request<LinkDTO>(`/links/${encodeURIComponent(linkId)}`),
 
@@ -290,32 +298,15 @@ export const assetsApi = {
 };
 
 export const logsApi = {
-  access: (params: {
-    linkId?: string;
-    from?: string;
-    to?: string;
-    result?: string;
-    reason?: string;
-    workspaceId?: string;
-    businessId?: string;
-    linkOwnerUserId?: string;
-    page?: number;
-    pageSize?: number;
-  }) => request<PageResponse<AccessEvent>>("/logs/access", { query: params }),
+  access: (params: AccessLogQuery) => request<PageResponse<AccessEvent>>("/logs/access", { query: { ...params } }),
 
-  audit: (params: {
-    workspaceId?: string;
-    actorUserId?: string;
-    businessId?: string;
-    resourceType?: string;
-    resourceId?: string;
-    action?: string;
-    result?: string;
-    from?: string;
-    to?: string;
-    page?: number;
-    pageSize?: number;
-  }) => request<PageResponse<AuditEvent>>("/logs/audit", { query: params }),
+  exportAccessCSV: ({ page: _page, pageSize: _pageSize, ...query }: AccessLogQuery) =>
+    downloadBlob("/logs/access/export.csv", { query }),
+
+  audit: (params: AuditLogQuery) => request<PageResponse<AuditEvent>>("/logs/audit", { query: { ...params } }),
+
+  exportAuditCSV: ({ page: _page, pageSize: _pageSize, ...query }: AuditLogQuery) =>
+    downloadBlob("/logs/audit/export.csv", { query }),
 
   analyticsSummary: (params: { range?: "24h" | "7d" | "30d"; timeZone?: string; workspaceId?: string }) =>
     request<AnalyticsResponse>("/analytics/summary", { query: params }),

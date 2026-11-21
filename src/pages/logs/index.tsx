@@ -1,8 +1,11 @@
-import { RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Select } from "antd";
+import { Download, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { groupOptions, useLinkGroups } from "@/hooks/use-link-groups";
 import { formatDateTime } from "@/lib/format";
 import { logsApi } from "@/services/api";
-import type { AccessEvent, AuditEvent, PageResponse } from "@/services/api/types";
+import { getApiErrorMessage, saveBlob } from "@/services/api/client";
+import type { AccessEvent, AccessLogQuery, AuditEvent, AuditLogQuery, PageResponse } from "@/services/api/types";
 import { useAuthStore } from "@/stores/auth-store";
 
 const PAGE_SIZE = 20;
@@ -20,6 +23,7 @@ const AUDIT_RESULT_BADGE: Record<AuditEvent["result"], { label: string; cls: str
 
 interface AccessFilter {
   linkId: string;
+  group: string;
   result: "" | "allowed" | "denied" | "challenge";
   from: string;
   to: string;
@@ -32,7 +36,7 @@ interface AuditFilter {
   to: string;
 }
 
-const EMPTY_ACCESS_FILTER: AccessFilter = { linkId: "", result: "", from: "", to: "" };
+const EMPTY_ACCESS_FILTER: AccessFilter = { linkId: "", group: "", result: "", from: "", to: "" };
 const EMPTY_AUDIT_FILTER: AuditFilter = { action: "", result: "", from: "", to: "" };
 
 function toRangeParam(from: string, to: string) {
@@ -89,7 +93,13 @@ function PaginationBar({
 
 export default function LogsPage() {
   const { hasPermission, initialized } = useAuthStore();
-  const canRead = hasPermission("logs.read");
+  const canRead = hasPermission("logs.read_own");
+  const groups = useLinkGroups(initialized && canRead && hasPermission("links.read"));
+  const accessRequest = useRef(0);
+  const auditRequest = useRef(0);
+  const exportLock = useRef(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
 
   const [tab, setTab] = useState<"access" | "audit">("access");
 
@@ -107,53 +117,88 @@ export default function LogsPage() {
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState<string | null>(null);
 
+  const accessQuery = useMemo<AccessLogQuery>(() => ({
+    linkId: accessFilter.linkId.trim() || undefined,
+    result: accessFilter.result || undefined,
+    ...(accessFilter.group === "ungrouped" ? { ungrouped: true as const } : accessFilter.group ? { groupId: accessFilter.group } : {}),
+    ...toRangeParam(accessFilter.from, accessFilter.to),
+  }), [accessFilter]);
+  const auditQuery = useMemo<AuditLogQuery>(() => ({
+    action: auditFilter.action.trim() || undefined,
+    result: auditFilter.result || undefined,
+    ...toRangeParam(auditFilter.from, auditFilter.to),
+  }), [auditFilter]);
+  const accessScope = JSON.stringify([canRead, tab, accessPage, accessQuery]);
+  const auditScope = JSON.stringify([canRead, tab, auditPage, auditQuery]);
+  const accessScopeRef = useRef(accessScope);
+  const auditScopeRef = useRef(auditScope);
+  accessScopeRef.current = accessScope;
+  auditScopeRef.current = auditScope;
+  const [loadedAccessScope, setLoadedAccessScope] = useState("");
+  const [loadedAuditScope, setLoadedAuditScope] = useState("");
+  const accessPending = accessLoading || loadedAccessScope !== accessScope;
+  const auditPending = auditLoading || loadedAuditScope !== auditScope;
+
   const loadAccess = useCallback(async () => {
+    const requestId = ++accessRequest.current;
     if (!canRead || tab !== "access") return;
+    const scope = accessScope;
     setAccessLoading(true);
     setAccessError(null);
     try {
-      const res = await logsApi.access({
-        page: accessPage,
-        pageSize: PAGE_SIZE,
-        linkId: accessFilter.linkId.trim() || undefined,
-        result: accessFilter.result || undefined,
-        ...toRangeParam(accessFilter.from, accessFilter.to),
-      });
-      setAccessData(res);
-    } catch (err) {
-      setAccessError(err instanceof Error ? err.message : "加载访问日志失败");
+      const result = await logsApi.access({ ...accessQuery, page: accessPage, pageSize: PAGE_SIZE });
+      if (requestId !== accessRequest.current || accessScopeRef.current !== scope) return;
+      setAccessData(result);
+      setLoadedAccessScope(scope);
+    } catch (error) {
+      if (requestId !== accessRequest.current || accessScopeRef.current !== scope) return;
+      setAccessData(null);
+      setLoadedAccessScope(scope);
+      setAccessError(getApiErrorMessage(error, "加载访问日志失败，请重试"));
     } finally {
-      setAccessLoading(false);
+      if (requestId === accessRequest.current && accessScopeRef.current === scope) setAccessLoading(false);
     }
-  }, [canRead, tab, accessPage, accessFilter]);
+  }, [canRead, tab, accessPage, accessQuery, accessScope]);
 
   const loadAudit = useCallback(async () => {
+    const requestId = ++auditRequest.current;
     if (!canRead || tab !== "audit") return;
+    const scope = auditScope;
     setAuditLoading(true);
     setAuditError(null);
     try {
-      const res = await logsApi.audit({
-        page: auditPage,
-        pageSize: PAGE_SIZE,
-        action: auditFilter.action.trim() || undefined,
-        result: auditFilter.result || undefined,
-        ...toRangeParam(auditFilter.from, auditFilter.to),
-      });
-      setAuditData(res);
-    } catch (err) {
-      setAuditError(err instanceof Error ? err.message : "加载审计日志失败");
+      const result = await logsApi.audit({ ...auditQuery, page: auditPage, pageSize: PAGE_SIZE });
+      if (requestId !== auditRequest.current || auditScopeRef.current !== scope) return;
+      setAuditData(result);
+      setLoadedAuditScope(scope);
+    } catch (error) {
+      if (requestId !== auditRequest.current || auditScopeRef.current !== scope) return;
+      setAuditData(null);
+      setLoadedAuditScope(scope);
+      setAuditError(getApiErrorMessage(error, "加载审计日志失败，请重试"));
     } finally {
-      setAuditLoading(false);
+      if (requestId === auditRequest.current && auditScopeRef.current === scope) setAuditLoading(false);
     }
-  }, [canRead, tab, auditPage, auditFilter]);
+  }, [canRead, tab, auditPage, auditQuery, auditScope]);
 
-  useEffect(() => {
-    loadAccess();
-  }, [loadAccess]);
+  useEffect(() => { void loadAccess(); return () => { accessRequest.current++; }; }, [loadAccess]);
+  useEffect(() => { void loadAudit(); return () => { auditRequest.current++; }; }, [loadAudit]);
 
-  useEffect(() => {
-    loadAudit();
-  }, [loadAudit]);
+  const exportCSV = async () => {
+    if (exportLock.current || !canRead) return;
+    // Only applied filters participate; inputs may contain an unsubmitted draft.
+    const query = tab === "access" ? accessQuery : auditQuery;
+    const exportTab = tab;
+    if (query.from && query.to && (Date.parse(query.to) < Date.parse(query.from) || Date.parse(query.to) - Date.parse(query.from) > 90 * 86400000)) {
+      setExportError("日志导出日期范围需为 90 天以内，结束日期不能早于开始日期"); return;
+    }
+    exportLock.current = true; setExporting(true); setExportError("");
+    try {
+      const blob = exportTab === "access" ? await logsApi.exportAccessCSV(query) : await logsApi.exportAuditCSV(auditQuery);
+      saveBlob(blob, `${exportTab}-logs-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`);
+    } catch (error) { setExportError(getApiErrorMessage(error, "导出日志失败，请稍后重试")); }
+    finally { exportLock.current = false; setExporting(false); }
+  };
 
   const applyAccessFilter = (e: FormEvent) => {
     e.preventDefault();
@@ -167,8 +212,8 @@ export default function LogsPage() {
     setAuditPage(1);
   };
 
-  const accessItems = accessData?.items || [];
-  const auditItems = auditData?.items || [];
+  const accessItems = loadedAccessScope === accessScope ? accessData?.items || [] : [];
+  const auditItems = loadedAuditScope === auditScope ? auditData?.items || [] : [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -200,11 +245,13 @@ export default function LogsPage() {
               </button>
             ))}
           </div>
+          {canRead && <button type="button" disabled={exporting || (tab === "access" ? accessPending || Boolean(accessError) : auditPending || Boolean(auditError))} onClick={() => void exportCSV()} className="stub-btn ghost !h-9" title="导出已应用筛选，最多 10000 条 / 20 MiB、90 天，每小时最多 10 次"><Download size={14} />{exporting ? "正在导出…" : "导出 CSV"}</button>}
           <button
             type="button"
+            disabled={!canRead || (tab === "access" ? accessPending : auditPending)}
             onClick={() => {
-              loadAccess();
-              loadAudit();
+              void loadAccess();
+              void loadAudit();
             }}
             className="stub-btn ghost !h-9"
           >
@@ -217,13 +264,14 @@ export default function LogsPage() {
         </div>
       </div>
 
+      {exportError && <p role="alert" className="text-xs text-[var(--signal-ink)]">{exportError}</p>}
       {!initialized ? (
         <div className="rounded-md border border-[var(--line-2)] bg-[var(--paper-3)] p-10 text-center text-sm text-[var(--ink-3)]">
           正在加载账号权限…
         </div>
       ) : !canRead ? (
         <div className="rounded-md border border-[var(--line-2)] bg-[var(--paper-3)] p-10 text-center text-sm text-[var(--ink-3)]">
-          当前账号没有 logs.read 权限，无法查看日志。请联系管理员开通。
+          当前账号没有 logs.read_own 权限，无法查看日志。请联系管理员开通。
         </div>
       ) : (
         <>
@@ -246,6 +294,11 @@ export default function LogsPage() {
                     placeholder="linkId"
                     className="h-9 w-56 rounded border border-[var(--line-2)] bg-[var(--paper)] px-3 font-mono text-xs outline-none"
                   />
+                </div>
+                <div className="flex min-w-48 flex-col gap-1.5">
+                  <label className="text-xs font-medium text-[var(--ink-2)]" htmlFor="access-group">当前分组</label>
+                  <Select id="access-group" value={accessInput.group} loading={groups.loading} onChange={(value: string) => setAccessInput({ ...accessInput, group: value })} options={[{ value: "", label: "全部分组" }, { value: "ungrouped", label: "未分组" }, ...groupOptions(groups.items, accessInput.group === "ungrouped" ? null : accessInput.group)]} />
+                  {groups.error && <p role="alert" className="text-xs text-[var(--signal-ink)]">{groups.error} <button type="button" disabled={groups.loading} onClick={() => void groups.reload()} className="underline">重试分组</button></p>}
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <label className="text-xs font-medium text-[var(--ink-2)]">结果 (result)</label>
@@ -316,14 +369,14 @@ export default function LogsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {accessLoading && (
+                      {accessPending && (
                         <tr>
                           <td colSpan={8} className="py-10 text-center text-xs text-[var(--ink-3)]">
                             加载中…
                           </td>
                         </tr>
                       )}
-                      {!accessLoading &&
+                      {!accessPending &&
                         accessItems.map((item) => {
                           const badge = ACCESS_RESULT_BADGE[item.result];
                           return (
@@ -362,7 +415,7 @@ export default function LogsPage() {
                             </tr>
                           );
                         })}
-                      {!accessLoading && accessItems.length === 0 && (
+                      {!accessPending && accessItems.length === 0 && (
                         <tr>
                           <td colSpan={8} className="py-10 text-center text-xs text-[var(--ink-3)]">
                             暂无访问日志，调整筛选条件后重试
@@ -376,7 +429,7 @@ export default function LogsPage() {
                   page={accessPage}
                   pageSize={accessData?.pagination.pageSize || PAGE_SIZE}
                   total={accessData?.pagination.total || 0}
-                  disabled={accessLoading}
+                  disabled={accessPending}
                   onPrev={() => setAccessPage((p) => Math.max(1, p - 1))}
                   onNext={() => setAccessPage((p) => p + 1)}
                 />
@@ -466,14 +519,14 @@ export default function LogsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {auditLoading && (
+                      {auditPending && (
                         <tr>
                           <td colSpan={8} className="py-10 text-center text-xs text-[var(--ink-3)]">
                             加载中…
                           </td>
                         </tr>
                       )}
-                      {!auditLoading &&
+                      {!auditPending &&
                         auditItems.map((item) => {
                           const badge = AUDIT_RESULT_BADGE[item.result];
                           const resource =
@@ -520,7 +573,7 @@ export default function LogsPage() {
                             </tr>
                           );
                         })}
-                      {!auditLoading && auditItems.length === 0 && (
+                      {!auditPending && auditItems.length === 0 && (
                         <tr>
                           <td colSpan={8} className="py-10 text-center text-xs text-[var(--ink-3)]">
                             暂无审计日志，调整筛选条件后重试
@@ -534,7 +587,7 @@ export default function LogsPage() {
                   page={auditPage}
                   pageSize={auditData?.pagination.pageSize || PAGE_SIZE}
                   total={auditData?.pagination.total || 0}
-                  disabled={auditLoading}
+                  disabled={auditPending}
                   onPrev={() => setAuditPage((p) => Math.max(1, p - 1))}
                   onNext={() => setAuditPage((p) => p + 1)}
                 />

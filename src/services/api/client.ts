@@ -16,6 +16,10 @@ export class ApiError extends Error {
   }
 }
 
+export function getApiErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof ApiError ? error.message : fallback;
+}
+
 export function getStoredToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
@@ -40,57 +44,79 @@ export function buildQuery(params?: Record<string, string | number | boolean | u
   return s ? `?${s}` : "";
 }
 
-export async function request<T = void>(
-  path: string,
-  options: RequestInit & { query?: Record<string, string | number | boolean | undefined | null> } = {},
-): Promise<T> {
-  const { query, headers: customHeaders, body, ...rest } = options;
-  const url = `${API_BASE}${path}${buildQuery(query)}`;
-  const token = getStoredToken();
+type RequestOptions = RequestInit & { query?: Record<string, string | number | boolean | undefined | null> };
 
+async function authenticatedFetch(path: string, options: RequestOptions = {}) {
+  const { query, headers: customHeaders, body, ...rest } = options;
+  const token = getStoredToken();
   const headers = new Headers(customHeaders);
   headers.set("X-Client-App", "shortlink_web");
-  if (token && !headers.has("Authorization")) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
+  if (token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
   if (body && !(body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
+  const response = await fetch(`${API_BASE}${path}${buildQuery(query)}`, { ...rest, headers, body });
+  return { response, token: headers.get("Authorization") === `Bearer ${token}` ? token : null };
+}
 
-  const res = await fetch(url, {
-    ...rest,
-    headers,
-    body,
-  });
-
-  if (res.status === 204) {
-    return undefined as T;
+function responseError(path: string, status: number, token: string | null, data: unknown): ApiError {
+  const payload = data as APIErrorPayload | null;
+  const message = payload?.error?.message || `请求失败 (${status})`;
+  if (status === 401 && token && getStoredToken() === token && !path.startsWith("/auth/login")) {
+    setStoredToken(null);
+    window.dispatchEvent(new CustomEvent("stub:unauthorized", { detail: message }));
   }
+  return new ApiError(status, payload?.error?.code || `http_${status}`, message, payload?.error?.requestId);
+}
 
-  const text = await res.text();
-  let data: unknown = null;
-  if (text) {
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = null;
-    }
-  }
+async function readJSON(response: Response): Promise<unknown> {
+  try { return JSON.parse(await response.text()); } catch { return null; }
+}
 
-  if (!res.ok) {
-    const errPayload = data as APIErrorPayload | null;
-    const code = errPayload?.error?.code || `http_${res.status}`;
-    const msg = errPayload?.error?.message || `请求失败 (${res.status})`;
-    const reqId = errPayload?.error?.requestId;
-
-    if (res.status === 401 && token && !path.startsWith("/auth/login")) {
-      setStoredToken(null);
-      window.dispatchEvent(new CustomEvent("stub:unauthorized", { detail: msg }));
-    }
-    throw new ApiError(res.status, code, msg, reqId);
-  }
-
+export async function request<T = void>(path: string, options: RequestOptions = {}): Promise<T> {
+  const { response, token } = await authenticatedFetch(path, options);
+  if (response.status === 204) return undefined as T;
+  const data = await readJSON(response);
+  if (!response.ok) throw responseError(path, response.status, token, data);
   return data as T;
+}
+
+export async function downloadBlob(path: string, options: RequestOptions = {}): Promise<Blob> {
+  const { response, token } = await authenticatedFetch(path, options);
+  const contentType = response.headers.get("Content-Type") || "";
+  if (!response.ok || /\bjson\b/i.test(contentType)) {
+    const data = await readJSON(response);
+    if (!response.ok) throw responseError(path, response.status, token, data);
+    const payload = data as APIErrorPayload | null;
+    throw new ApiError(response.status, payload?.error?.code || "invalid_download", payload?.error?.message || "导出未返回 CSV 文件，请重试", payload?.error?.requestId);
+  }
+  if (contentType.split(";", 1)[0].trim().toLowerCase() !== "text/csv") {
+    throw new ApiError(response.status, "invalid_download", "导出未返回 CSV 文件，请重试");
+  }
+  const maxBytes = 20 * 1024 * 1024;
+  const declaredBytes = Number(response.headers.get("Content-Length"));
+  if (declaredBytes > maxBytes) {
+    await response.body?.cancel();
+    throw new ApiError(413, "export_too_large", "导出文件超过 20 MiB，请缩小筛选范围");
+  }
+  const blob = await response.blob();
+  if (blob.size > maxBytes) throw new ApiError(413, "export_too_large", "导出文件超过 20 MiB，请缩小筛选范围");
+  return blob;
+}
+
+export function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  try {
+    document.body.appendChild(anchor);
+    anchor.click();
+  } finally {
+    anchor.remove();
+    // Let the browser consume the URL before releasing the backing Blob.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
 }
 
 export function uploadBinaryPart<T = unknown>(

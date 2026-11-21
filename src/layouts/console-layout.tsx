@@ -22,8 +22,10 @@ import {
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { CreateLinkDrawer, type LinkQuickPreset } from "@/components/create-link-drawer";
+import { NotificationCenter } from "@/components/notification-center";
 import { formatMB } from "@/lib/format";
 import { authApi } from "@/services/api";
+import type { LinkDTO } from "@/services/api/types";
 import { useAuthStore } from "@/stores/auth-store";
 import { useThemeStore } from "@/stores/theme-store";
 
@@ -52,11 +54,23 @@ export default function ConsoleLayout() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createPreset, setCreatePreset] = useState<LinkQuickPreset | null>(null);
+  const [createSource, setCreateSource] = useState<LinkDTO | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [quickCode, setQuickCode] = useState("");
 
   const openCreateLink = (preset?: LinkQuickPreset) => {
+    setCreateSource(null);
     setCreatePreset(preset ?? null);
+    setCreateOpen(true);
+  };
+
+  const copyLinkConfiguration = (source: LinkDTO) => {
+    if (!hasPermission(source.target.type === "url" ? "links.create_url" : "links.create_asset")) {
+      message.warning("没有创建该目标类型短链的权限");
+      return;
+    }
+    setCreatePreset(null);
+    setCreateSource(source);
     setCreateOpen(true);
   };
 
@@ -262,6 +276,17 @@ export default function ConsoleLayout() {
             {dark ? <Sun size={16} /> : <Moon size={16} />}
           </button>
 
+          <NotificationCenter
+            key={token}
+            token={token}
+            onOpenLink={(linkId) => {
+              const alreadyOnLinks = location.pathname === "/console/links";
+              const query = new URLSearchParams(alreadyOnLinks ? location.search : "");
+              query.set("linkId", linkId);
+              navigate({ pathname: "/console/links", search: query.toString() }, { replace: alreadyOnLinks });
+            }}
+          />
+
           {(hasPermission("links.create_url") || hasPermission("links.create_asset")) && (
             <>
               <button
@@ -286,7 +311,7 @@ export default function ConsoleLayout() {
         </header>
 
         <div className="mx-auto max-w-[1360px] px-6 pt-7 pb-20 md:px-8">
-          <Outlet context={{ openCreateLink }} />
+          <Outlet key={token} context={{ openCreateLink, copyLinkConfiguration }} />
         </div>
       </main>
 
@@ -351,6 +376,7 @@ export default function ConsoleLayout() {
       <CreateLinkDrawer
         open={createOpen}
         initialPreset={createPreset}
+        source={createSource}
         onClose={() => setCreateOpen(false)}
         onSuccess={() => {
           window.dispatchEvent(new CustomEvent("stub:link-created"));

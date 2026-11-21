@@ -217,12 +217,81 @@ export interface LinkTargetDTO {
   assetSizeBytes?: number;
 }
 
+export interface GroupDTO {
+  groupId: string;
+  workspaceId: string;
+  name: string;
+  description: string;
+  linkCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateGroupRequest {
+  name: string;
+  description?: string;
+  workspaceId?: string;
+}
+
+export interface UpdateGroupRequest {
+  name?: string;
+  description?: string;
+}
+
+export interface LinkListQuery {
+  page?: number;
+  pageSize?: number;
+  status?: string;
+  availability?: string;
+  workspaceId?: string;
+  targetType?: string;
+  code?: string;
+  keyword?: string;
+  assetId?: string;
+  createdFrom?: string;
+  createdTo?: string;
+  groupId?: string;
+  ungrouped?: true;
+}
+
+export interface AccessLogQuery {
+  linkId?: string;
+  groupId?: string;
+  ungrouped?: true;
+  from?: string;
+  to?: string;
+  result?: string;
+  reason?: string;
+  workspaceId?: string;
+  businessId?: string;
+  linkOwnerUserId?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface AuditLogQuery {
+  workspaceId?: string;
+  actorUserId?: string;
+  businessId?: string;
+  resourceType?: string;
+  resourceId?: string;
+  action?: string;
+  result?: string;
+  from?: string;
+  to?: string;
+  page?: number;
+  pageSize?: number;
+}
+
 export interface CreateLinkRequest {
+  groupId?: string | null;
   title?: string;
   tags?: string[];
   code?: string;
   target: LinkTargetInput;
   expiresAt?: string | null;
+  activeFrom?: string | null;
+  activeUntil?: string | null;
   accessPassword?: string;
   ruleSource: {
     type: "inline" | "template";
@@ -233,15 +302,19 @@ export interface CreateLinkRequest {
 
 export interface LinkDTO {
   linkId: string;
+  groupId: string | null;
+  groupName: string | null;
   title: string;
   tags: string[];
   code: string;
   url: string;
   target: LinkTargetDTO;
   status: "enabled" | "disabled";
-  availability: "available" | "expired" | "visit_limit_reached" | "disabled";
+  availability: "available" | "expired" | "window_ended" | "not_started" | "visit_limit_reached" | "disabled";
   rules: LinkRules;
   expiresAt?: string | null;
+  activeFrom?: string | null;
+  activeUntil?: string | null;
   visitsUsed: number;
   ruleTemplate?: TemplateRef | null;
   createdAt: string;
@@ -250,6 +323,8 @@ export interface LinkDTO {
 
 export interface LinkListItem {
   linkId: string;
+  groupId: string | null;
+  groupName: string | null;
   title: string;
   tags: string[];
   code: string;
@@ -259,20 +334,25 @@ export interface LinkListItem {
   assetId?: string;
   assetSizeBytes?: number;
   status: "enabled" | "disabled";
-  availability: "available" | "expired" | "visit_limit_reached" | "disabled";
+  availability: "available" | "expired" | "window_ended" | "not_started" | "visit_limit_reached" | "disabled";
   expiresAt?: string | null;
+  activeFrom?: string | null;
+  activeUntil?: string | null;
   visitsUsed: number;
   maxVisits: number;
   createdAt: string;
 }
 
-export interface UpdateLinkMetadataRequest {
-  title: string;
-  tags: string[];
-}
+// Title and tags are an atomic pair; group-only updates are supported.
+export type UpdateLinkMetadataRequest = (
+  | { title: string; tags: string[] }
+  | { title?: never; tags?: never }
+) & { groupId?: string | null };
 
 export interface UpdateLinkRulesRequest {
   expiresAt?: string | null;
+  activeFrom?: string | null;
+  activeUntil?: string | null;
   maxVisits?: number;
   allowedIpCidrs?: string[];
   requirePassword?: boolean;
@@ -435,8 +515,10 @@ export interface UnknownShortCodeEvent {
 
 export interface MetricSummary {
   requestCount: number;
+  /** Non-challenge link access attempts; independent of whether a visit was consumed. */
   visitAttemptCount: number;
   redirectCount: number;
+  /** Denied requests only. Password challenges are included in requestCount. */
   failureCount: number;
 }
 
