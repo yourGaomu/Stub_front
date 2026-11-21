@@ -13,9 +13,11 @@ interface ConsoleOutletContext {
   openCreateLink: (preset?: LinkQuickPreset) => void;
 }
 
-const AVAILABILITY_BADGE: Record<string, { label: string; cls: string }> = {
+const AVAILABILITY_BADGE: Record<LinkListItem["availability"], { label: string; cls: string }> = {
   available: { label: "可用", cls: "ok" },
   expired: { label: "已过期", cls: "warn" },
+  window_ended: { label: "开放结束", cls: "warn" },
+  not_started: { label: "尚未开放", cls: "neutral" },
   visit_limit_reached: { label: "次数耗尽", cls: "warn" },
   disabled: { label: "已停用", cls: "bad" },
 };
@@ -35,7 +37,7 @@ export default function OverviewPage() {
     setLoading(true);
     try {
       const tasks: Promise<unknown>[] = [refreshUsage()];
-      if (hasPermission("logs.read")) {
+      if (hasPermission("links.read")) {
         tasks.push(
           logsApi
             .analyticsSummary({ range, timeZone: "Asia/Shanghai" })
@@ -94,7 +96,7 @@ export default function OverviewPage() {
         <div>
           <h1 className="font-cn-display text-[28px] font-black tracking-tight">工作空间概览</h1>
           <p className="mt-1 text-[13px] text-[var(--ink-2)]">
-            时区 Asia/Shanghai · 统计口径区分总请求、有效尝试、成功跳转与拒绝挑战
+            时区 Asia/Shanghai · 统计口径区分总请求、规则尝试、成功跳转与拒绝请求
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -152,7 +154,7 @@ export default function OverviewPage() {
         <div className="p-5">
           <div className="flex justify-between font-mono text-[11px] text-[var(--ink-3)]">
             <span>URL LINKS · 普通网址短链配额</span>
-            <span>仅统计未过期</span>
+            <span>累计创建，过期不释放名额</span>
           </div>
           <div className="mt-2 font-display text-4xl leading-none">
             {usage?.urlLinks.used ?? 0}{" "}
@@ -172,7 +174,7 @@ export default function OverviewPage() {
         <div className="p-5">
           <div className="flex justify-between font-mono text-[11px] text-[var(--ink-3)]">
             <span>MINIO LINKS · 素材短链配额</span>
-            <span>仅统计未过期</span>
+            <span>累计创建，过期不释放名额</span>
           </div>
           <div className="mt-2 font-display text-4xl leading-none">
             {usage?.minioAssetLinks.used ?? 0}{" "}
@@ -225,7 +227,7 @@ export default function OverviewPage() {
           {
             code: "VISIT_ATTEMPT_COUNT",
             val: analytics?.totals.visitAttemptCount ?? 0,
-            desc: "未过期、未停用且进入规则校验的尝试",
+            desc: "主链路放行或拒绝；不含口令挑战与尝试",
             accent: false,
           },
           {
@@ -237,7 +239,7 @@ export default function OverviewPage() {
           {
             code: "FAILURE_COUNT",
             val: analytics?.totals.failureCount ?? 0,
-            desc: "denied + challenge（口令挑战与错误）",
+            desc: "仅 denied；口令挑战只计入总请求",
             accent: true,
           },
         ].map((m) => (
@@ -263,7 +265,7 @@ export default function OverviewPage() {
               <h3 className="text-[15px] font-bold">
                 访问分桶趋势（{range === "24h" ? "按小时" : "按自然日"} · {range}）
               </h3>
-              <p className="text-xs text-[var(--ink-3)]">深墨：成功跳转 redirectCount · 橙色：拒绝与挑战 failureCount</p>
+              <p className="text-xs text-[var(--ink-3)]">深墨：成功跳转 redirectCount · 橙色：拒绝请求 failureCount</p>
             </div>
             {loading && <span className="font-mono text-xs text-[var(--ink-3)]">同步中…</span>}
           </div>
@@ -276,7 +278,7 @@ export default function OverviewPage() {
                   return (
                     <div
                       key={b.at}
-                      title={`${formatDateTime(b.at)} | 跳转: ${b.redirectCount} | 拒绝/挑战: ${b.failureCount}`}
+                      title={`${formatDateTime(b.at)} | 跳转: ${b.redirectCount} | 拒绝: ${b.failureCount}`}
                       className="group flex flex-1 flex-col items-center justify-end gap-0.5"
                     >
                       {failH > 0 && (
@@ -303,7 +305,7 @@ export default function OverviewPage() {
 
         <div className="rounded-md border border-[var(--line-2)] bg-[var(--paper-3)]">
           <div className="border-b border-[var(--line)] px-5 py-3.5">
-            <h3 className="text-[15px] font-bold">失败与挑战原因分布 (failureReasons)</h3>
+            <h3 className="text-[15px] font-bold">拒绝原因分布 (failureReasons)</h3>
             <p className="text-xs text-[var(--ink-3)]">对应访问日志 reason 标准枚举</p>
           </div>
           <div className="flex flex-col gap-3 p-5">
@@ -322,7 +324,7 @@ export default function OverviewPage() {
               ))
             ) : (
               <div className="py-10 text-center font-mono text-xs text-[var(--ink-3)]">
-                当前时间窗口无拒绝或挑战记录
+                当前时间窗口无拒绝记录
               </div>
             )}
           </div>

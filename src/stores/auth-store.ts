@@ -54,7 +54,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   setLoginResult: async (token, user) => {
     setStoredToken(token);
-    set({ token, user, isAdmin: user.role === "admin" });
+    set({
+      token, user, isAdmin: user.role === "admin", permissions: {}, permissionItems: [],
+      businesses: [], usage: null, initialized: false,
+    });
     await get().refreshBootstrap();
   },
 
@@ -81,6 +84,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         authApi.myBusinesses(),
         authApi.myUsage(),
       ]);
+      if (getStoredToken() !== token) return;
       const permMap: Record<string, boolean> = {};
       perms.items.forEach((p) => {
         permMap[p.code] = p.enabled;
@@ -97,26 +101,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         initialized: true,
       });
     } catch {
-      setStoredToken(null);
-      set({
-        token: null,
-        user: null,
-        isAdmin: false,
-        permissions: {},
-        permissionItems: [],
-        businesses: [],
-        usage: null,
-        loading: false,
-        initialized: true,
-      });
+      if (getStoredToken() !== token) return;
+      get().clearSession();
     }
   },
 
   refreshUsage: async () => {
-    if (!get().token) return;
+    const token = get().token;
+    if (!token) return;
     try {
       const usage = await authApi.myUsage();
-      set({ usage });
+      if (get().token === token && getStoredToken() === token) set({ usage });
     } catch {
       // ignore
     }
@@ -151,6 +146,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       businesses: [],
       usage: null,
       initialized: true,
+      loading: false,
     });
   },
 }));
+
+window.addEventListener("stub:unauthorized", () => {
+  if (!getStoredToken()) useAuthStore.getState().clearSession();
+});
